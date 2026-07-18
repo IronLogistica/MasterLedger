@@ -16,6 +16,60 @@ class AISuggestionError(Exception):
     pass
 
 
+# ── Conoscenza specialistica per tipi di documento con schema contabile
+# standard in Italia. L'AI riceve queste indicazioni SOLO come guida sullo
+# schema di scrittura tipico — i conti restano comunque vincolati al piano
+# dei conti reale passato a parte: se un conto "giusto" non esiste, l'AI
+# sceglie il più vicino e lo segnala in "note", non ne inventa uno nuovo.
+_GUIDA_BUSTA_PAGA = """
+Questo documento è (o potrebbe essere) una BUSTA PAGA italiana. Lo schema
+CONTABILE STANDARD per una busta paga (competenza, non pagamento) è:
+
+DARE  Costo del personale — Salari e stipendi     = retribuzione LORDA in busta
+DARE  Oneri sociali INPS/INAIL a carico azienda    = contributi datore di lavoro (NON le trattenute del dipendente)
+DARE  Accantonamento TFR (costo)                   = quota TFR maturata nel periodo
+AVERE Debiti v/dipendenti c/retribuzioni           = netto a pagare al dipendente
+AVERE Debiti v/Istituti previdenziali (INPS/INAIL) = trattenute previdenziali del dipendente + contributi a carico azienda
+AVERE Erario c/ritenute da versare (IRPEF)          = ritenute fiscali (IRPEF + eventuali addizionali regionali/comunali)
+AVERE Fondo TFR                                     = quota TFR accantonata (se non gestita a parte)
+
+Nota bene: le trattenute previdenziali/fiscali A CARICO DEL DIPENDENTE non
+sono un costo aggiuntivo per l'azienda — riducono solo il netto pagato,
+spostando l'importo dal debito verso il dipendente al debito verso
+INPS/Erario. Il costo aziendale vero è: retribuzione lorda + contributi
+INPS/INAIL a carico azienda + quota TFR.
+Se dal testo non risulta chiaramente un valore (es. TFR non indicato), non
+inventarlo: ometti quella riga e segnalalo in "note".
+"""
+
+_GUIDA_F24 = """
+Questo documento è (o potrebbe essere) un modello F24 italiano (pagamento
+unificato di imposte/contributi). Un F24 di norma NON genera un nuovo
+costo: è il PAGAMENTO di debiti/ritenute già registrati in precedenza
+(es. dalle buste paga, dalle fatture, dall'IVA periodica). Lo schema
+CONTABILE STANDARD è:
+
+DARE  Erario c/ritenute da versare        = importi a debito con codice tributo erariale (es. ritenute IRPEF, 1001/1040...)
+DARE  Debiti v/Istituti previdenziali     = importi a debito con codice tributo INPS/INAIL (sezione INPS)
+DARE  altri debiti tributari pertinenti   = es. IVA a debito, IRES, IRAP, se presenti come voci a debito nell'F24
+AVERE Banca c/c                           = SALDO EFFETTIVAMENTE PAGATO (somma "importi a debito" meno somma "importi a credito compensato")
+
+Attenzione alla COMPENSAZIONE: se l'F24 mostra sia importi "a debito" sia
+importi "a credito compensato" (es. un credito IVA usato per compensare un
+debito INPS), il conto Banca si muove solo per il saldo netto — gli importi
+compensati tra loro NON escono dalla banca, ma vanno comunque estinti nei
+rispettivi conti debito/credito (quindi possono servire righe aggiuntive che
+si bilanciano tra loro senza toccare la banca).
+Se non riesci a distinguere con certezza le singole voci per codice
+tributo, raggruppa in modo ragionevole e segnala l'incertezza in "note".
+"""
+
+_GUIDE_PER_TIPO = {
+    "busta_paga": _GUIDA_BUSTA_PAGA,
+    "f24": _GUIDA_F24,
+}
+
+
 def estrai_testo_pdf(file_stream, max_pagine=15, max_caratteri=12000):
     """
     Estrae il testo da un PDF "digitale" (con testo selezionabile — la
@@ -58,7 +112,7 @@ def estrai_testo_pdf(file_stream, max_pagine=15, max_caratteri=12000):
     return testo, pagine_lette
 
 
-def suggerisci_scrittura(descrizione, accounts, testo_documento=None):
+def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_documento=None):
     """
     Chiede all'AI di proporre le righe di una scrittura contabile a partire
     da una descrizione in linguaggio naturale e/o dal testo di un documento
@@ -70,6 +124,10 @@ def suggerisci_scrittura(descrizione, accounts, testo_documento=None):
     testo_documento: testo estratto da un PDF caricato (opzionale). Se presente,
               l'AI lo usa come fonte primaria (importi, aliquote IVA, controparte,
               date) e la "descrizione" diventa un'indicazione aggiuntiva/di contesto.
+    tipo_documento: None/"generico" | "busta_paga" | "f24" — se indicato, aggiunge
+              alla richiesta lo schema contabile standard italiano per quel tipo
+              di documento (vedi _GUIDE_PER_TIPO), così l'AI non deve indovinare
+              da zero lo schema di scritture più complesse.
 
     Ritorna un dict:
         {"description": str, "lines": [{"account_code": str, "pk": "40"|"50", "amount": float}, ...], "note": str|None}
@@ -132,6 +190,10 @@ def suggerisci_scrittura(descrizione, accounts, testo_documento=None):
     if testo_documento:
         parti_messaggio_utente.append(f"Testo estratto dal documento caricato:\n{testo_documento}")
     messaggio_utente = "\n\n".join(parti_messaggio_utente)
+
+    guida_specialistica = _GUIDE_PER_TIPO.get(tipo_documento, "")
+    if guida_specialistica:
+        system_prompt += "\n\n" + guida_specialistica
 
     client = OpenAI(api_key=api_key)
 
