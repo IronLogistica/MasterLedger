@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🏭</span> Anagrafica Cespiti</div>
+  <div class="card-body">
+    {% if assets %}
+    <table class="masterledger-table">
+      <thead><tr><th>Codice</th><th>Descrizione</th><th>Categoria</th><th class="td-num">Valore Acquisto</th><th class="td-num">Fondo Amm.</th><th class="td-num">Residuo</th></tr></thead>
+      <tbody>
+        {% for a in assets %}
+        <tr>
+          <td class="mono">{{ a.code }}</td>
+          <td>{{ a.description }}</td>
+          <td>{{ a.asset_category }}</td>
+          <td class="td-num">{{ "%.2f"|format(a.acquisition_value) }} €</td>
+          <td class="td-num color-red">{{ "%.2f"|format(a.accumulated_depreciation or 0) }} €</td>
+          <td class="td-num fw-bold">{{ "%.2f"|format(a.acquisition_value - (a.accumulated_depreciation or 0)) }} €</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Nessun cespite ancora capitalizzato. Usa Nuovo cespite per crearne uno.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

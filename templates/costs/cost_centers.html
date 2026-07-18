@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🏷️</span> Centri di Costo <span class="tx-code">Centri di costo</span></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('costs.cost_center_new') }}" style="margin-bottom:18px;">
+      <div class="form-grid">
+        <div class="form-group"><label>Codice</label><input type="text" name="code" placeholder="es. CC-LOG-01" required></div>
+        <div class="form-group"><label>Nome</label><input type="text" name="name" placeholder="es. Logistica" required></div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">➕ Crea Centro di costo</button></div>
+    </form>
+
+    {% if centers %}
+    <table class="masterledger-table">
+      <thead><tr><th>Codice</th><th>Nome</th></tr></thead>
+      <tbody>
+        {% for c in centers %}<tr><td class="mono">{{ c.code }}</td><td>{{ c.name }}</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Nessun centro di costo ancora creato.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

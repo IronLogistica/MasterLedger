@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>📤</span> Fattura cliente — Registrazione Fattura Cliente <span class="tx-code">Fattura cliente</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Fattura <strong>multi-riga e multi-aliquota</strong>. Genera: <strong>Dare</strong> Crediti v/Clienti,
+      <strong>Avere</strong> Ricavi (una riga contabile per ogni riga fattura) + IVA a Debito.
+      L'IVA è calcolata <em>per gruppo di aliquota</em> sulla somma degli imponibili, con arrotondamento
+      fiscale — esattamente come impongono le specifiche SdI (controlli 00421/00422).
+    </div>
+    <div class="info-box">
+      📎 Dopo la registrazione potrai scaricare l'XML FatturaPA pronto per l'upload sull'intermediario (es. Aruba).
+      Assicurati prima che il cliente abbia i <strong>dati fiscali</strong> compilati:
+      {% for c in customers %}
+        <a href="{{ url_for('ar.customer_fiscali', customer_id=c.id) }}">{{ c.code }}</a>{{ ", " if not loop.last else "" }}
+      {% endfor %}
+    </div>
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Cliente <span class="req">*</span></label>
+          <select name="customer_id" required>
+            <option value="">-- Seleziona --</option>
+            {% for c in customers %}<option value="{{ c.id }}">{{ c.code }} — {{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>N° Fattura <span style="font-weight:400;">(max 20 caratteri, almeno una cifra)</span></label>
+          <input type="text" name="invoice_number" maxlength="20" placeholder="es. FTV-2026-0234">
+        </div>
+        <div class="form-group">
+          <label>Data Fattura</label>
+          <input type="date" name="invoice_date">
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>Testo di testata</label>
+          <input type="text" name="description" placeholder="Es. Fornitura componenti Q3 2026">
+        </div>
+      </div>
+
+      <h4 style="margin:16px 0 8px;">Righe fattura</h4>
+      {% include "ar/_invoice_lines.html" %}
+
+      <div class="btn-row"><button type="submit" class="btn btn-primary">✅ Registra Fattura AR</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

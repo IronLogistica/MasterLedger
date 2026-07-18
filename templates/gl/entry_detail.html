@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span>📄</span> Documento {{ entry.doc_number }}
+    <span class="tx-code">{{ entry.doc_type }}</span>
+  </div>
+  <div class="card-body">
+    <div class="form-grid" style="margin-bottom:14px;">
+      <div><strong>Data Documento:</strong> {{ entry.doc_date.strftime('%d/%m/%Y') }}</div>
+      <div><strong>Modulo Origine:</strong> {{ entry.source_module }}</div>
+      <div><strong>Riferimento:</strong> {{ entry.reference or '—' }}</div>
+      <div><strong>Descrizione:</strong> {{ entry.description }}</div>
+    </div>
+
+    {% if entry.is_reversed %}
+      <div class="alert alert-warning">Questo documento è stato <strong>stornato</strong> dal documento
+        <a href="{{ url_for('gl.entry_detail', entry_id=entry.reversed_by_id) }}">collegato</a>.</div>
+    {% endif %}
+    {% if entry.reverses_id %}
+      <div class="alert alert-info">Questo documento è uno <strong>storno</strong> del documento
+        <a href="{{ url_for('gl.entry_detail', entry_id=entry.reverses_id) }}">originale</a>.</div>
+    {% endif %}
+
+    <table class="masterledger-table">
+      <thead><tr><th>Conto</th><th>Descrizione Conto</th><th>Centro di costo</th><th class="td-num">Dare €</th><th class="td-num">Avere €</th></tr></thead>
+      <tbody>
+        {% for l in entry.lines %}
+        <tr>
+          <td class="mono">{{ l.account.code }}</td>
+          <td>{{ l.account.name }}</td>
+          <td>{{ l.cost_center.code if l.cost_center else '—' }}</td>
+          <td class="td-num">{{ "%.2f"|format(l.dare) if l.dare else '—' }}</td>
+          <td class="td-num">{{ "%.2f"|format(l.avere) if l.avere else '—' }}</td>
+        </tr>
+        {% endfor %}
+        <tr style="font-weight:700; background:#f5f6f7;">
+          <td colspan="3">TOTALE</td>
+          <td class="td-num">{{ "%.2f"|format(entry.total_dare) }}</td>
+          <td class="td-num">{{ "%.2f"|format(entry.total_avere) }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    {% if entry.doc_type in ('DR', 'DG') and not entry.is_reversed %}
+    <div style="margin-top:16px;">
+      <a href="{{ url_for('ar.invoice_xml', entry_id=entry.id) }}" class="btn btn-primary">📎 Scarica XML FatturaPA</a>
+      <div style="font-size:12px; color:var(--ml-label); margin-top:6px;">
+        Dopo il download, carica il file sul pannello del tuo intermediario (es. Aruba Fatturazione Elettronica →
+        "Carica Fatture") per firma e invio allo SdI. Se mancano dati obbligatori (azienda o cliente) comparirà
+        un avviso con l'elenco preciso di cosa compilare.
+      </div>
+    </div>
+    {% endif %}
+
+    {% if not entry.is_reversed and not entry.reverses_id %}
+    <form method="POST" action="{{ url_for('gl.entry_reverse', entry_id=entry.id) }}" style="margin-top:16px;"
+          onsubmit="return confirm('Confermi lo storno di questo documento? Verrà creato un nuovo documento di segno opposto — l\'originale resterà comunque visibile.');">
+      <button type="submit" class="btn btn-danger">↩️ Storna Documento</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

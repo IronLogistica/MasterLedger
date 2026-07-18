@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>➕</span> Capitalizzazione cespite — Acquisto Cespite <span class="tx-code">Nuovo cespite</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Crea l'anagrafica cespite e lo capitalizza in un'unica operazione. Genera: <strong>Dare</strong> Cespiti + IVA a Credito, <strong>Avere</strong> Debiti v/Fornitori.
+    </div>
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group" style="grid-column: span 2;">
+          <label>Descrizione <span class="req">*</span></label>
+          <input type="text" name="description" required placeholder="Es. Tornio CNC modello XR-500">
+        </div>
+        <div class="form-group">
+          <label>Categoria</label>
+          <select name="category">
+            <option>Impianti e Macchinari</option>
+            <option>Attrezzature</option>
+            <option>Mobili e Arredi</option>
+            <option>Automezzi</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Data Acquisto</label>
+          <input type="date" name="acquisition_date">
+        </div>
+        <div class="form-group">
+          <label>Valore Acquisto € <span class="req">*</span></label>
+          <input type="number" step="0.01" name="value" required>
+        </div>
+        <div class="form-group">
+          <label>Aliquota IVA %</label>
+          <select name="vat_rate"><option value="22">22%</option><option value="4">4%</option></select>
+        </div>
+        <div class="form-group">
+          <label>Vita Utile (anni) — default suggerito dal Commercialista: {{ default_rate }}%</label>
+          <input type="number" name="useful_life" value="10">
+        </div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">✅ Capitalizza Cespite</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

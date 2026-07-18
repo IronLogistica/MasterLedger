@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local settings, data, uploads and logs
+.env
+instance/
+masterledger.db
+*.sqlite3
+*.log
+uploads/
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/

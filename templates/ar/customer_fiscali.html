@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🧾</span> Dati Fiscali — {{ customer.name }} <span class="tx-code">FatturaPA</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Questi dati alimentano il blocco <strong>CessionarioCommittente</strong> dell'XML FatturaPA generato dalle
+      fatture Fattura cliente di questo cliente. Vanno compilati una sola volta.
+    </div>
+
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Partita IVA <span style="font-weight:400;">(11 cifre)</span></label>
+          <input type="text" name="piva" pattern="[0-9]{11}" maxlength="11" value="{{ customer.piva or '' }}" placeholder="es. 03456789012">
+        </div>
+        <div class="form-group">
+          <label>Codice Fiscale <span style="font-weight:400;">(se diverso dalla P.IVA)</span></label>
+          <input type="text" name="codice_fiscale" value="{{ customer.codice_fiscale or '' }}">
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>Indirizzo</label>
+          <input type="text" name="indirizzo" value="{{ customer.indirizzo or '' }}" placeholder="es. Via Roma 12">
+        </div>
+        <div class="form-group">
+          <label>CAP <span style="font-weight:400;">(5 cifre)</span></label>
+          <input type="text" name="cap" pattern="[0-9]{5}" maxlength="5" value="{{ customer.cap or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Comune</label>
+          <input type="text" name="comune" value="{{ customer.comune or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Provincia <span style="font-weight:400;">(sigla)</span></label>
+          <input type="text" name="provincia" maxlength="2" value="{{ customer.provincia or '' }}" placeholder="es. PG">
+        </div>
+        <div class="form-group">
+          <label>Nazione <span style="font-weight:400;">(codice ISO)</span></label>
+          <input type="text" name="nazione" maxlength="2" value="{{ customer.nazione or 'IT' }}">
+        </div>
+        <div class="form-group">
+          <label>Codice Destinatario <span style="font-weight:400;">(esattamente 7 caratteri — lascia "0000000" se il cliente non te lo ha comunicato)</span></label>
+          <input type="text" name="codice_destinatario" pattern="[A-Za-z0-9]{7}" maxlength="7" value="{{ customer.codice_destinatario or '0000000' }}" style="text-transform:uppercase;">
+        </div>
+        <div class="form-group">
+          <label>PEC Destinatario <span style="font-weight:400;">(opzionale — con codice 0000000 e PEC vuota, lo SdI deposita la fattura nel cassetto fiscale del cliente)</span></label>
+          <input type="email" name="pec_destinatario" value="{{ customer.pec_destinatario or '' }}" placeholder="es. cliente@pec.it">
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">💾 Salva Dati Fiscali</button>
+        <a href="{{ url_for('ar.customer_invoice') }}" class="btn">← Torna a Fattura cliente</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

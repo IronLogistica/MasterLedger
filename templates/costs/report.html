@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>📊</span> Report Costi — Costi in Arrivo per Centro di costo</div>
+  <div class="card-body">
+    <div class="info-box">
+      Questo report <strong>non è una tabella separata</strong>: sono le righe di Prima Nota sui conti di Conto Economico
+      (marcati come "cost_relevant" nel Piano dei Conti), aggregate automaticamente per Centro di costo — esattamente
+      attraverso le regole contabili configurate.
+    </div>
+
+    {% if by_center %}
+      {% for code, data in by_center.items() %}
+      <div style="margin-bottom:18px;">
+        <div style="font-weight:700; font-size:14px; margin-bottom:6px;">{{ code }} — {{ data.name }}
+          <span style="float:right; color:var(--ml-blue-dark);">Totale: € {{ "%.2f"|format(data.total) }}</span>
+        </div>
+        <table class="masterledger-table">
+          <thead><tr><th>Documento</th><th>Conto</th><th class="td-num">Importo</th></tr></thead>
+          <tbody>
+            {% for l in data.lines %}
+            <tr>
+              <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=l.entry_id) }}">{{ l.entry.doc_number }}</a></td>
+              <td>{{ l.account.code }} — {{ l.account.name }}</td>
+              <td class="td-num">{{ "%.2f"|format(l.dare or l.avere) }} €</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endfor %}
+    {% else %}
+    <div class="empty-state">Nessun costo/ricavo ancora registrato sui conti di Conto Economico.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

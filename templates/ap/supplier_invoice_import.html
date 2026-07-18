@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>📩</span> Import XML — Fattura Fornitore ricevuta <span class="tx-code">Fattura fornitore</span></div>
+  <div class="card-body">
+
+    {% if not parsed %}
+    <div class="info-box">
+      Carica qui il file <strong>.xml</strong> (o <strong>.xml.p7m</strong>) della fattura ricevuta,
+      scaricato dal pannello del tuo intermediario o dal cassetto fiscale. L'app legge fornitore,
+      numero, data, imponibile e IVA direttamente dal file — tu scegli solo il conto di costo e
+      confermi. Niente ricopiatura, niente errori di battitura.
+      <br><small>Nota: la firma dei file .p7m non viene verificata (quello lo fa già lo SdI/intermediario) —
+      viene solo letto il contenuto.</small>
+    </div>
+    <form method="POST" enctype="multipart/form-data">
+      <div class="form-group">
+        <label>File fattura elettronica <span class="req">*</span></label>
+        <input type="file" name="xml_file" accept=".xml,.p7m" required>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">🔍 Leggi il file</button></div>
+    </form>
+
+    {% else %}
+    <div class="info-box">
+      File letto correttamente. <strong>Controlla i dati e completa la registrazione.</strong>
+      {% if parsed.tipo_documento == 'TD04' %}
+      <br>⚠️ Questo è una <strong>NOTA DI CREDITO fornitore (TD04)</strong>: la scrittura sarà registrata a segni invertiti.
+      {% endif %}
+    </div>
+    <table class="masterledger-table">
+      <tbody>
+        <tr><td><strong>Fornitore</strong></td><td>{{ parsed.cedente_denominazione }} — P.IVA {{ parsed.cedente_piva or '—' }}
+          {% if vendor_match %}<span class="badge">già in anagrafica: {{ vendor_match.code }}</span>
+          {% else %}<span class="badge">nuovo — verrà creato</span>{% endif %}</td></tr>
+        <tr><td><strong>Documento</strong></td><td>{{ parsed.tipo_documento }} n. {{ parsed.numero }} del {{ parsed.data }}</td></tr>
+        {% for r in parsed.riepiloghi %}
+        <tr><td>Aliquota {{ r.aliquota }}%{% if r.natura %} ({{ r.natura }}){% endif %}</td>
+            <td class="td-num">Imponibile {{ "%.2f"|format(r.imponibile) }} € — Imposta {{ "%.2f"|format(r.imposta) }} €</td></tr>
+        {% endfor %}
+        <tr><td><strong>Totale</strong></td><td class="td-num"><strong>{{ "%.2f"|format(parsed.totale_imponibile + parsed.totale_imposta) }} €</strong></td></tr>
+        {% if parsed.descrizione_righe %}<tr><td>Righe</td><td>{{ parsed.descrizione_righe }}</td></tr>{% endif %}
+      </tbody>
+    </table>
+
+    <form method="POST">
+      <input type="hidden" name="phase" value="confirm">
+      <input type="hidden" name="cedente_piva" value="{{ parsed.cedente_piva }}">
+      <input type="hidden" name="cedente_denominazione" value="{{ parsed.cedente_denominazione }}">
+      <input type="hidden" name="numero" value="{{ parsed.numero }}">
+      <input type="hidden" name="data" value="{{ parsed.data }}">
+      <input type="hidden" name="tipo_documento" value="{{ parsed.tipo_documento }}">
+      <input type="hidden" name="totale_imponibile" value="{{ parsed.totale_imponibile }}">
+      <input type="hidden" name="totale_imposta" value="{{ parsed.totale_imposta }}">
+      <input type="hidden" name="descrizione" value="{{ parsed.descrizione_righe }}">
+      <div class="form-group" style="max-width:480px;">
+        <label>Conto di costo <span class="req">*</span></label>
+        <select name="expense_account_id" required>
+          <option value="">-- Seleziona --</option>
+          {% for a in expense_accounts %}<option value="{{ a.id }}">{{ a.code }} — {{ a.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-success">✅ Registra in Prima Nota</button>
+        <a href="{{ url_for('ap.supplier_invoice_import') }}" class="btn">↺ Carica un altro file</a>
+      </div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

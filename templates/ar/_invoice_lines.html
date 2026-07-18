@@ -1,0 +1,97 @@
+{# Blocco righe fattura riutilizzato da Fattura cliente (fattura) e Nota di credito cliente (nota di credito).
+   Ogni riga: descrizione, imponibile, aliquota, natura (solo con 0%), conto ricavi.
+   L'IVA si calcola per GRUPPO di aliquota (regola SdI 00421/00422), non per riga. #}
+<table class="masterledger-table" id="lines-table">
+  <thead>
+    <tr>
+      <th style="width:34%;">Descrizione <span class="req">*</span></th>
+      <th style="width:12%;">Imponibile € <span class="req">*</span></th>
+      <th style="width:10%;">Aliquota</th>
+      <th style="width:20%;">Natura <span style="font-weight:400;">(solo 0%)</span></th>
+      <th style="width:20%;">Conto Ricavi <span class="req">*</span></th>
+      <th style="width:4%;"></th>
+    </tr>
+  </thead>
+  <tbody id="lines-body">
+    <tr class="line-row">
+      <td><input type="text" name="line_description[]" maxlength="255" placeholder="es. Segnale stradale D=60"></td>
+      <td><input type="number" step="0.01" min="0.01" name="line_net[]"></td>
+      <td>
+        <select name="line_vat_rate[]" onchange="lineRateChanged(this)">
+          <option value="22">22%</option>
+          <option value="10">10%</option>
+          <option value="4">4%</option>
+          <option value="0">0%</option>
+        </select>
+      </td>
+      <td>
+        <select name="line_natura[]" disabled>
+          <option value="">—</option>
+          {% for code, label in natura_codes.items() %}
+          <option value="{{ code }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </td>
+      <td>
+        <select name="line_account_id[]">
+          <option value="">-- Seleziona --</option>
+          {% for a in revenue_accounts %}<option value="{{ a.id }}">{{ a.code }} — {{ a.name }}</option>{% endfor %}
+        </select>
+      </td>
+      <td><button type="button" class="btn" onclick="removeLine(this)" title="Rimuovi riga">✕</button></td>
+    </tr>
+  </tbody>
+</table>
+<div class="btn-row" style="margin-top:8px;">
+  <button type="button" class="btn" onclick="addLine()">➕ Aggiungi riga</button>
+  <span id="totals-preview" style="margin-left:16px; font-weight:600;"></span>
+</div>
+
+<script>
+  // La Natura è richiesta dallo SdI SOLO con aliquota 0 (scarti 00400/00429)
+  // ed è VIETATA con aliquota > 0 (scarto 00430): il campo si abilita di
+  // conseguenza. L'IVA in anteprima è calcolata per GRUPPO di aliquota
+  // (come farà il server e come impone il controllo 00421), non per riga.
+  function lineRateChanged(sel) {
+    var row = sel.closest('tr');
+    var natura = row.querySelector('select[name="line_natura[]"]');
+    if (sel.value === '0') { natura.disabled = false; natura.required = true; }
+    else { natura.disabled = true; natura.required = false; natura.value = ''; }
+    updateTotals();
+  }
+  function addLine() {
+    var body = document.getElementById('lines-body');
+    var first = body.querySelector('.line-row');
+    var clone = first.cloneNode(true);
+    clone.querySelectorAll('input').forEach(function(i){ i.value=''; });
+    clone.querySelectorAll('select').forEach(function(s){ s.selectedIndex=0; });
+    var nat = clone.querySelector('select[name="line_natura[]"]');
+    nat.disabled = true; nat.required = false;
+    body.appendChild(clone);
+  }
+  function removeLine(btn) {
+    var body = document.getElementById('lines-body');
+    if (body.querySelectorAll('.line-row').length > 1) btn.closest('tr').remove();
+    updateTotals();
+  }
+  function halfUp2(x) { return Math.round((x + Number.EPSILON) * 100) / 100; }
+  function updateTotals() {
+    var groups = {};
+    document.querySelectorAll('#lines-body .line-row').forEach(function(row){
+      var net = parseFloat(row.querySelector('input[name="line_net[]"]').value) || 0;
+      var rate = row.querySelector('select[name="line_vat_rate[]"]').value;
+      if (net > 0) groups[rate] = (groups[rate] || 0) + net;
+    });
+    var totNet = 0, totVat = 0;
+    Object.keys(groups).forEach(function(rate){
+      totNet += groups[rate];
+      totVat += halfUp2(groups[rate] * parseFloat(rate) / 100);
+    });
+    document.getElementById('totals-preview').textContent =
+      totNet ? ('Imponibile ' + totNet.toFixed(2) + ' € · IVA ' + totVat.toFixed(2) +
+                ' € · Totale ' + (totNet + totVat).toFixed(2) + ' € (anteprima)') : '';
+  }
+  document.addEventListener('input', function(e){
+    if (e.target.name === 'line_net[]') updateTotals();
+  });
+</script>

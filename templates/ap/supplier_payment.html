@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>💳</span> Pagamento fornitore — Pagamento Fornitore <span class="tx-code">Pagamento fornitore</span></div>
+  <div class="card-body">
+    <div class="info-box">Seleziona le fatture aperte da compensare. Genera: <strong>Dare</strong> Debiti v/Fornitori, <strong>Avere</strong> Banca c/c.</div>
+    {% if open_invoices %}
+    <form method="POST">
+      <table class="masterledger-table">
+        <thead><tr><th></th><th>Documento</th><th>Fornitore</th><th>Data</th><th class="td-num">Importo</th></tr></thead>
+        <tbody>
+          {% for inv in open_invoices %}
+          <tr>
+            <td><input type="checkbox" name="invoice_ids[]" value="{{ inv.id }}"></td>
+            <td class="mono">{{ inv.doc_number }}</td>
+            <td>{{ inv.vendor.name if inv.vendor else '—' }}</td>
+            <td>{{ inv.doc_date.strftime('%d/%m/%Y') }}</td>
+            <td class="td-num">{{ "%.2f"|format(inv.gross_amount or 0) }} €</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="btn-row"><button type="submit" class="btn btn-success">💳 Registra Pagamento</button></div>
+    </form>
+    {% else %}
+    <div class="empty-state">Nessuna fattura fornitore aperta da pagare.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

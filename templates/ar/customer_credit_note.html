@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>↩️</span> Nota di credito cliente — Nota di Credito Cliente <span class="tx-code">Nota di credito cliente</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Rettifica (in tutto o in parte) una fattura già emessa. Contabilmente è speculare alla fattura:
+      <strong>Dare</strong> Ricavi + IVA a Debito (storno), <strong>Avere</strong> Crediti v/Clienti.
+      L'XML esce con <strong>TipoDocumento TD04</strong> e importi positivi — è il tipo documento a
+      qualificare la nota di credito, come da tracciato FatturaPA. Se indichi la fattura originale,
+      il riferimento finisce nel blocco <strong>DatiFattureCollegate</strong>.
+    </div>
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Cliente <span class="req">*</span></label>
+          <select name="customer_id" required>
+            <option value="">-- Seleziona --</option>
+            {% for c in customers %}<option value="{{ c.id }}">{{ c.code }} — {{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>N° Nota di Credito <span style="font-weight:400;">(max 20 caratteri, almeno una cifra)</span></label>
+          <input type="text" name="invoice_number" maxlength="20" placeholder="es. NC-2026-0012">
+        </div>
+        <div class="form-group">
+          <label>Data</label>
+          <input type="date" name="invoice_date">
+        </div>
+        <div class="form-group">
+          <label>Fattura originale <span style="font-weight:400;">(per DatiFattureCollegate)</span></label>
+          <select name="linked_invoice_id">
+            <option value="">-- Nessun riferimento --</option>
+            {% for inv in dr_invoices %}
+            <option value="{{ inv.id }}">{{ inv.doc_number }} — {{ inv.reference or '' }} — {{ inv.customer.name if inv.customer else '' }} ({{ inv.doc_date.strftime('%d/%m/%Y') }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="grid-column: span 2;">
+          <label>Motivazione</label>
+          <input type="text" name="description" placeholder="Es. Reso merce non conforme — rif. fattura FTV-2026-0234">
+        </div>
+      </div>
+
+      <h4 style="margin:16px 0 8px;">Righe da rettificare</h4>
+      {% include "ar/_invoice_lines.html" %}
+
+      <div class="btn-row"><button type="submit" class="btn btn-danger">↩️ Registra Nota di Credito</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

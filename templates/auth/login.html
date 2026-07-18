@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block guest_content %}
+<div style="max-width:380px; margin:80px auto; padding:0 20px;">
+  <div style="text-align:center; margin-bottom:24px;">
+    <span style="background:var(--ml-header); color:#fff; font-weight:900; padding:4px 12px; border-radius:4px;">MasterLedger</span>
+    <div style="margin-top:10px; font-size:18px; font-weight:700;">MasterLedger — {{ company_name }}</div>
+    <div style="font-size:12.5px; color:var(--ml-label);">Codice azienda {{ company_code }}</div>
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <form method="POST">
+        <div class="form-group" style="margin-bottom:12px;">
+          <label>Utente</label>
+          <input type="text" name="username" required autofocus>
+        </div>
+        <div class="form-group" style="margin-bottom:16px;">
+          <label>Password</label>
+          <input type="password" name="password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">Accedi</button>
+      </form>
+
+      <div class="theory-note" style="margin-top:18px;">
+        <strong>Utenze demo</strong> (create con <code>flask seed</code>):<br>
+        Operatore: <code>operatore</code> / <code>operatore123</code><br>
+        Commercialista: <code>commercialista</code> / <code>commercialista123</code>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🏗️</span> struttura organizzativa — Setup dei Magazzini <span class="tx-code">Struttura magazzino</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Il <strong>sede operativa</strong> è uno stabilimento fisico assegnato al Codice azienda. La <strong>Area di magazzino</strong> è
+      un'area di magazzino all’interno della sede operativa — ogni tipo di area (Materie Prime, Prodotti Finiti, Semilavorati, Blocco
+      Qualità, Scarti) è collegata a un preciso conto di magazzino nel Piano dei Conti, per studiare il corretto
+      stoccaggio: se sposti merce tra aree con conto diverso, può generare automaticamente una scrittura di riallineamento
+      contabile tra i due conti.
+    </div>
+
+    <!-- ── PLANT ── -->
+    <div style="font-size:13px; font-weight:700; margin:14px 0 8px;">Sede operativa — Stabilimenti</div>
+    <table class="masterledger-table" style="margin-bottom:12px;">
+      <thead><tr><th>Codice</th><th>Nome</th><th>Città</th><th>Regione/Paese</th><th>Codice azienda</th><th></th></tr></thead>
+      <tbody>
+        {% for p in sites %}
+        <tr>
+          <td class="mono">{{ p.code }}</td><td>{{ p.name }}</td><td>{{ p.city }}</td><td>{{ p.region }}</td><td class="mono">{{ p.company_code }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('warehouse.site_delete', site_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa sede operativa?');">
+              <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state">Nessuna sede operativa creata.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <form method="POST" action="{{ url_for('warehouse.site_new') }}">
+      <div class="form-grid">
+        <div class="form-group"><label>Codice sede operativa <span class="req">*</span></label><input type="text" name="code" maxlength="4" placeholder="es. 2000" required></div>
+        <div class="form-group"><label>Nome</label><input type="text" name="name" placeholder="es. Stabilimento Bergamo"></div>
+        <div class="form-group"><label>Città</label><input type="text" name="city" placeholder="es. Bergamo"></div>
+        <div class="form-group"><label>Regione/Paese</label><input type="text" name="region" value="Lombardia, IT"></div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">➕ Crea sede operativa</button></div>
+    </form>
+
+    <!-- ── STORAGE LOCATION ── -->
+    <div style="font-size:13px; font-weight:700; margin:26px 0 8px;">Area di magazzino — Ubicazioni di Magazzino</div>
+    <table class="masterledger-table" style="margin-bottom:12px;">
+      <thead><tr><th>Sede operativa</th><th>Codice</th><th>Nome Area</th><th>Tipo</th><th>Conto Magazzino (G/L)</th><th></th></tr></thead>
+      <tbody>
+        {% for p in sites %}
+          {% for s in p.warehouse_areas %}
+          <tr>
+            <td class="mono">{{ p.code }}</td><td class="mono">{{ s.code }}</td><td>{{ s.name }}</td>
+            <td>{{ s.area_type_label }}</td>
+            <td class="mono">{{ (s.account.code + ' — ' + s.account.name) if s.account else 'nessuno (transito)' }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('warehouse.area_delete', sloc_id=s.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa ubicazione?');">
+                <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+    <form method="POST" action="{{ url_for('warehouse.area_new') }}">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Sede operativa <span class="req">*</span></label>
+          <select name="site_id" required>
+            <option value="">-- Seleziona --</option>
+            {% for p in sites %}<option value="{{ p.id }}">{{ p.code }} — {{ p.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Codice Ubicazione <span class="req">*</span></label><input type="text" name="code" maxlength="4" placeholder="es. 0001" required></div>
+        <div class="form-group"><label>Nome Area</label><input type="text" name="name" placeholder="es. Magazzino Materie Prime"></div>
+        <div class="form-group">
+          <label>Tipo Area</label>
+          <select name="area_type">
+            {% for code, label in area_types.items() %}<option value="{{ code }}">{{ label }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">➕ Crea area di magazzino</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

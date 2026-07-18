@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>⚙️</span> Configurazione Fiscale <span class="tx-code">Solo Commercialista</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Qui imposti i parametri di <strong>giudizio professionale</strong> (aliquote, metodi di valutazione, soglie) —
+      il software li applica automaticamente da ora in poi in tutte le registrazioni. Ogni volta che cambia un caso reale,
+      aggiorna qui: non serve toccare il codice dell'applicazione.
+    </div>
+
+    <form method="POST">
+      {% for category, params in params_by_category.items() %}
+        <div style="margin-bottom:20px;">
+          <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--ml-label); margin-bottom:8px; border-bottom:1px solid var(--ml-border); padding-bottom:4px;">
+            {{ category|capitalize }}
+          </div>
+          {% for p in params %}
+          <div class="form-group" style="margin-bottom:12px;">
+            <label>{{ p.description }}</label>
+            <input type="text" name="{{ p.key }}" value="{{ p.value }}">
+          </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+      <button type="submit" class="btn btn-primary">💾 Salva Parametri</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

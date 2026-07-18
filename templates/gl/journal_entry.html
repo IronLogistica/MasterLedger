@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🧾</span> Prima nota — Registrazione Prima Nota <span class="tx-code">Prima nota</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Registrazione manuale sul General Ledger. Ogni riga va assegnata a Dare (40) o Avere (50).
+      Il documento viene accettato solo se <strong>Dare = Avere</strong> — nessuna scrittura sbilanciata viene mai salvata.
+    </div>
+
+    <form method="POST" id="journal_entry-form">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Data Documento</label>
+          <input type="date" name="doc_date" value="{{ '' }}">
+        </div>
+        <div class="form-group">
+          <label>Testo</label>
+          <input type="text" name="description" placeholder="Es. Rettifica ratei attivi">
+        </div>
+      </div>
+
+      <table class="masterledger-table" style="margin-top:16px;" id="lines-table">
+        <thead>
+          <tr><th>Conto</th><th>PK</th><th>Centro di costo</th><th class="td-num">Importo €</th><th></th></tr>
+        </thead>
+        <tbody id="lines-tbody">
+          <!-- righe aggiunte via JS -->
+        </tbody>
+      </table>
+
+      <div style="margin-top:8px;">
+        <button type="button" class="btn btn-ghost" onclick="addLine()">➕ Aggiungi Riga</button>
+      </div>
+
+      <div style="margin-top:14px; font-size:13px;">
+        <strong>Totale Dare:</strong> <span id="tot-dare">0,00</span> € &nbsp;|&nbsp;
+        <strong>Totale Avere:</strong> <span id="tot-avere">0,00</span> € &nbsp;|&nbsp;
+        <span id="balance-status" style="font-weight:700;"></span>
+      </div>
+
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">✅ Registra Documento (Enter)</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+const ACCOUNTS = [
+  {% for a in accounts %}{ id: {{ a.id }}, code: "{{ a.code }}", name: "{{ a.name|e }}" },{% endfor %}
+];
+const COST_CENTERS = [
+  {% for c in cost_centers %}{ id: {{ c.id }}, code: "{{ c.code }}", name: "{{ c.name|e }}" },{% endfor %}
+];
+
+function accountOptions() {
+  return '<option value="">-- Conto --</option>' + ACCOUNTS.map(a => `<option value="${a.id}">${a.code} — ${a.name}</option>`).join('');
+}
+function costCenterOptions() {
+  return '<option value="">--</option>' + COST_CENTERS.map(c => `<option value="${c.id}">${c.code}</option>`).join('');
+}
+
+function addLine() {
+  const tbody = document.getElementById('lines-tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><select name="account_id[]" class="acct-sel">${accountOptions()}</select></td>
+    <td><select name="pk[]" class="pk-sel" onchange="recalc()">
+          <option value="40">40 — Dare</option>
+          <option value="50">50 — Avere</option>
+        </select></td>
+    <td><select name="cost_center_id[]">${costCenterOptions()}</select></td>
+    <td><input type="number" step="0.01" name="amount[]" class="amt-input" oninput="recalc()" style="width:110px; text-align:right;"></td>
+    <td><span onclick="this.closest('tr').remove(); recalc();" style="cursor:pointer; color:var(--ml-red);">✕</span></td>
+  `;
+  tbody.appendChild(tr);
+}
+
+function recalc() {
+  let dare = 0, avere = 0;
+  document.querySelectorAll('#lines-tbody tr').forEach(tr => {
+    const pk = tr.querySelector('.pk-sel').value;
+    const amt = parseFloat(tr.querySelector('.amt-input').value) || 0;
+    if (pk === '40') dare += amt; else avere += amt;
+  });
+  document.getElementById('tot-dare').textContent = dare.toFixed(2);
+  document.getElementById('tot-avere').textContent = avere.toFixed(2);
+  const statusEl = document.getElementById('balance-status');
+  if (Math.abs(dare - avere) < 0.01 && dare > 0) {
+    statusEl.textContent = '✅ Bilanciato'; statusEl.style.color = 'var(--ml-green)';
+  } else {
+    statusEl.textContent = '⚠️ Non bilanciato'; statusEl.style.color = 'var(--ml-red)';
+  }
+}
+
+// due righe iniziali di cortesia
+addLine(); addLine();
+</script>
+{% endblock %}

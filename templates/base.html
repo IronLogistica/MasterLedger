@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}MasterLedger{% endblock %} — {{ company_name }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+{% if current_user.is_authenticated %}
+<div id="shell-bar">
+  <div class="logo"><span class="box">ML</span>MasterLedger — {{ company_name }}</div>
+  <div class="spacer"></div>
+  <div class="user-info">
+    <div>{{ current_user.full_name }}</div>
+    <div class="role">{{ current_user.role|capitalize }} · Codice {{ company_code }} · <a href="{{ url_for('auth.logout') }}" style="color:#cde3ff;">Esci</a></div>
+  </div>
+</div>
+
+<div id="layout">
+  <nav id="sidebar">
+    <div class="sidebar-title">Generale</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='dashboard.home' }}" href="{{ url_for('dashboard.home') }}">🏠 Home</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='gl.journal_list' }}" href="{{ url_for('gl.journal_list') }}">📖 Giornale (Libro)</a>
+
+    <div class="sidebar-title">Contabilità Generale</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='gl.journal_entry' }}" href="{{ url_for('gl.journal_entry') }}">🧾 Prima nota</a>
+
+    <div class="sidebar-title">Ciclo Fornitore (AP)</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_invoice' }}" href="{{ url_for('ap.supplier_invoice') }}">📥 Fatture fornitore</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_invoice_import' }}" href="{{ url_for('ap.supplier_invoice_import') }}">📩 Import XML Fattura Ricevuta</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_payment' }}" href="{{ url_for('ap.supplier_payment') }}">💳 Pagamenti fornitori</a>
+
+    <div class="sidebar-title">Ciclo Cliente (AR)</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='ar.customer_invoice' }}" href="{{ url_for('ar.customer_invoice') }}">📤 Fatture clienti</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='ar.customer_credit_note' }}" href="{{ url_for('ar.customer_credit_note') }}">↩️ Note di credito</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='ar.customer_payment' }}" href="{{ url_for('ar.customer_payment') }}">💰 Incassi clienti</a>
+
+    <div class="sidebar-title">Cespiti</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='assets.asset_list' }}" href="{{ url_for('assets.asset_list') }}">🏭 Anagrafica Cespiti</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='assets.asset_create' }}" href="{{ url_for('assets.asset_create') }}">➕ Nuovo cespite</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='assets.depreciation' }}" href="{{ url_for('assets.depreciation') }}">📉 Ammortamenti</a>
+
+    <div class="sidebar-title">Controllo costi</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='costs.cost_centers' }}" href="{{ url_for('costs.cost_centers') }}">🏷️ Centri di costo</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='costs.report' }}" href="{{ url_for('costs.report') }}">📊 Report Costi</a>
+
+    <div class="sidebar-title">Setup Magazzini</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='warehouse.setup' }}" href="{{ url_for('warehouse.setup') }}">🏗️ Sede operativa &amp; Area di magazzino <span class="badge">Struttura magazzino</span></a>
+
+    {% if current_user.is_commercialista %}
+    <div class="sidebar-title">Area Riservata</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='dashboard.config_fiscale' }}" href="{{ url_for('dashboard.config_fiscale') }}">⚙️ Configurazione Fiscale</a>
+    {% endif %}
+  </nav>
+
+  <main id="content">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+{% else %}
+  {% block guest_content %}{% endblock %}
+{% endif %}
+
+</body>
+</html>

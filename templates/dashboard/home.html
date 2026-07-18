@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🏠</span> Panoramica</div>
+  <div class="card-body">
+    <div class="form-grid" style="margin-bottom:10px;">
+      <div>
+        <div style="font-size:11px; color:var(--ml-label); text-transform:uppercase;">Totale Dare Registrato</div>
+        <div style="font-size:22px; font-weight:700; color:var(--ml-blue-dark);">€ {{ "%.2f"|format(totale_dare) }}</div>
+      </div>
+      <div>
+        <div style="font-size:11px; color:var(--ml-label); text-transform:uppercase;">Totale Avere Registrato</div>
+        <div style="font-size:22px; font-weight:700; color:var(--ml-green);">€ {{ "%.2f"|format(totale_avere) }}</div>
+      </div>
+    </div>
+    {% if (totale_dare - totale_avere)|abs < 0.01 %}
+      <div class="alert alert-success" style="margin:0;">✅ Il giornale quadra: Dare = Avere su tutti i documenti registrati.</div>
+    {% else %}
+      <div class="alert alert-danger" style="margin:0;">⚠️ Squadratura rilevata — verifica le ultime registrazioni.</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><span>📋</span> Ultimi Documenti Registrati</div>
+  <div class="card-body">
+    {% if recent_entries %}
+    <table class="masterledger-table">
+      <thead><tr><th>Documento</th><th>Tipo</th><th>Data</th><th>Descrizione</th><th class="td-num">Dare</th><th class="td-num">Avere</th></tr></thead>
+      <tbody>
+        {% for e in recent_entries %}
+        <tr>
+          <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=e.id) }}">{{ e.doc_number }}</a></td>
+          <td class="mono">{{ e.doc_type }}</td>
+          <td>{{ e.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ e.description }}{% if e.is_reversed %} <span class="status-badge status-open">STORNATO</span>{% endif %}</td>
+          <td class="td-num">{{ "%.2f"|format(e.total_dare) }}</td>
+          <td class="td-num">{{ "%.2f"|format(e.total_avere) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Nessun documento ancora registrato. Inizia da Prima nota (Prima Nota) o Fattura fornitore (Fattura Fornitore).</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
