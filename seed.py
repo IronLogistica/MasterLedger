@@ -40,6 +40,7 @@ ACCOUNTS = [
     ("4000",   "Ricavi di Vendita Prodotti",                 "ricavo",                True,  "REVENUE"),
     ("450000", "Costo del Venduto",                           "costo",                 True,  "COST"),
     ("165000", "Ricevimenti da fatturare (EM/RF)",            "patrimoniale_passivo",  False, None),
+    ("430000", "Variazione Rimanenze Prodotti Finiti",         "ricavo",                True,  "REVENUE"),
 ]
 
 

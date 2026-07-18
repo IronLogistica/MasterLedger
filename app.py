@@ -46,6 +46,7 @@ def create_app(config_class=Config):
     from blueprints.costs.routes import costs_bp
     from blueprints.sd.routes import sd_bp
     from blueprints.mm.routes import mm_bp
+    from blueprints.production.routes import production_bp
     from blueprints.materials.routes import materials_bp
     from blueprints.parties.routes import parties_bp
 
@@ -59,6 +60,7 @@ def create_app(config_class=Config):
     app.register_blueprint(costs_bp, url_prefix="/costs")
     app.register_blueprint(sd_bp, url_prefix="/sd")
     app.register_blueprint(mm_bp, url_prefix="/mm")
+    app.register_blueprint(production_bp, url_prefix="/produzione")
     app.register_blueprint(materials_bp, url_prefix="/materials")
     app.register_blueprint(parties_bp, url_prefix="/soggetti-economici")
 
