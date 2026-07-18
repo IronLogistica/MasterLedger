@@ -431,7 +431,7 @@ class Quotation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=True)  # FIX: allineato alla migrazione reale (nullable=True), che non ha imposto NOT NULL sulle righe storiche
     status = db.Column(db.String(15), default="aperto")  # aperto | convertito | scaduto
     note = db.Column(db.String(255))
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
@@ -461,7 +461,7 @@ class SalesOrder(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=True)  # FIX: allineato alla migrazione reale (nullable=True), che non ha imposto NOT NULL sulle righe storiche
     quotation_id = db.Column(db.Integer, db.ForeignKey("quotations.id"), nullable=True)
     status = db.Column(db.String(15), default="aperto")  # aperto | consegnato
     note = db.Column(db.String(255))
@@ -505,7 +505,7 @@ class Delivery(db.Model):
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
     order_id = db.Column(db.Integer, db.ForeignKey("sales_orders.id"), nullable=False)
-    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=True)  # FIX: allineato alla migrazione reale (nullable=True), che non ha imposto NOT NULL sulle righe storiche
     cogs_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     billing_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
@@ -551,7 +551,7 @@ class PurchaseOrder(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=True)  # FIX: allineato alla migrazione reale (nullable=True), che non ha imposto NOT NULL sulle righe storiche
     note = db.Column(db.String(255))
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
