@@ -16,20 +16,67 @@ class AISuggestionError(Exception):
     pass
 
 
-def suggerisci_scrittura(descrizione, accounts):
+def estrai_testo_pdf(file_stream, max_pagine=15, max_caratteri=12000):
+    """
+    Estrae il testo da un PDF "digitale" (con testo selezionabile — la
+    stragrande maggioranza di fatture, bollette e documenti generati da
+    software gestionali). NON fa OCR: un PDF scansionato come pura immagine
+    restituirà testo vuoto o quasi — in quel caso avvisiamo l'utente invece
+    di fingere che sia andato tutto bene.
+
+    file_stream: oggetto file-like (es. request.files['documento'].stream)
+    Ritorna: (testo_estratto: str, pagine_lette: int)
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        raise AISuggestionError(
+            "Il pacchetto 'pypdf' non è installato. Aggiungilo a requirements.txt (pypdf==5.1.0)."
+        )
+
+    try:
+        reader = PdfReader(file_stream)
+    except Exception as e:
+        raise AISuggestionError(f"Impossibile leggere il PDF: {e}")
+
+    testo_totale = []
+    pagine_lette = 0
+    for pagina in reader.pages[:max_pagine]:
+        try:
+            testo_pagina = pagina.extract_text() or ""
+        except Exception:
+            testo_pagina = ""
+        if testo_pagina.strip():
+            testo_totale.append(testo_pagina)
+        pagine_lette += 1
+
+    testo = "\n".join(testo_totale).strip()
+    # Limite di sicurezza sui caratteri per non gonfiare troppo la richiesta all'AI
+    if len(testo) > max_caratteri:
+        testo = testo[:max_caratteri] + "\n[...testo troncato...]"
+
+    return testo, pagine_lette
+
+
+def suggerisci_scrittura(descrizione, accounts, testo_documento=None):
     """
     Chiede all'AI di proporre le righe di una scrittura contabile a partire
-    da una descrizione in linguaggio naturale.
+    da una descrizione in linguaggio naturale e/o dal testo di un documento
+    (es. una fattura PDF già estratta con estrai_testo_pdf).
 
     accounts: lista di oggetti Account (code, name, account_type) — il piano
               dei conti REALE dell'azienda; l'AI può usare solo questi codici,
               non può inventarne altri.
+    testo_documento: testo estratto da un PDF caricato (opzionale). Se presente,
+              l'AI lo usa come fonte primaria (importi, aliquote IVA, controparte,
+              date) e la "descrizione" diventa un'indicazione aggiuntiva/di contesto.
 
     Ritorna un dict:
         {"description": str, "lines": [{"account_code": str, "pk": "40"|"50", "amount": float}, ...], "note": str|None}
 
     Solleva AISuggestionError se manca la chiave API, se la chiamata fallisce,
-    o se la risposta dell'AI non è un JSON valido con almeno due righe.
+    se non c'è nessun contenuto da analizzare, o se la risposta dell'AI non è
+    un JSON valido con almeno due righe.
     """
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_KEY")
     if not api_key:
@@ -46,8 +93,10 @@ def suggerisci_scrittura(descrizione, accounts):
             "(openai==1.54.4) e rifai il deploy."
         )
 
-    if not descrizione or not descrizione.strip():
-        raise AISuggestionError("Descrivi prima l'operazione da registrare.")
+    descrizione = (descrizione or "").strip()
+    testo_documento = (testo_documento or "").strip()
+    if not descrizione and not testo_documento:
+        raise AISuggestionError("Descrivi l'operazione oppure carica un documento da analizzare.")
 
     piano_conti = "\n".join(f"{a.code} | {a.name} | {a.account_type}" for a in accounts)
 
@@ -56,23 +105,33 @@ def suggerisci_scrittura(descrizione, accounts):
         "Il piano dei conti disponibile è ESATTAMENTE questo (codice | nome | tipo conto). "
         "Non puoi inventare altri conti né altri codici:\n"
         f"{piano_conti}\n\n"
-        "Dato un testo in linguaggio naturale che descrive un'operazione contabile, rispondi "
-        "SOLO con un oggetto JSON (nessun testo prima o dopo), con questa struttura:\n"
+        "Riceverai una descrizione in linguaggio naturale e/o il testo estratto da un documento "
+        "(es. una fattura). Se c'è il testo del documento, usalo come fonte principale per importi, "
+        "aliquota IVA, data e controparte; la descrizione (se presente) è solo un'indicazione di contesto.\n\n"
+        "Rispondi SOLO con un oggetto JSON (nessun testo prima o dopo), con questa struttura:\n"
         "{\n"
-        '  "description": "testo breve per la Prima Nota",\n'
+        '  "description": "testo breve per la Prima Nota (es. numero fattura e fornitore/cliente)",\n'
         '  "lines": [\n'
         '    {"account_code": "codice ESATTO dal piano conti sopra", "pk": "40 oppure 50", "amount": numero},\n'
         "    ...\n"
         "  ],\n"
-        '  "note": "eventuali avvertenze o incertezze, altrimenti null"\n'
+        '  "note": "eventuali avvertenze o incertezze (es. IVA non chiara, importo dubbio), altrimenti null"\n'
         "}\n\n"
         "Regole obbligatorie:\n"
         "- 40 = Dare, 50 = Avere.\n"
         "- La somma degli importi in Dare deve essere ESATTAMENTE uguale alla somma in Avere.\n"
+        "- Se è una fattura, ricordati di scorporare l'IVA se un conto IVA è disponibile nel piano dei conti.\n"
         "- Usa solo i codici conto elencati sopra: se nessuno è adatto, scegli il più plausibile "
         "e scrivi il dubbio in \"note\".\n"
         "- Servono almeno due righe (una in Dare, una in Avere)."
     )
+
+    parti_messaggio_utente = []
+    if descrizione:
+        parti_messaggio_utente.append(f"Descrizione fornita dall'utente:\n{descrizione}")
+    if testo_documento:
+        parti_messaggio_utente.append(f"Testo estratto dal documento caricato:\n{testo_documento}")
+    messaggio_utente = "\n\n".join(parti_messaggio_utente)
 
     client = OpenAI(api_key=api_key)
 
@@ -81,7 +140,7 @@ def suggerisci_scrittura(descrizione, accounts):
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": descrizione.strip()},
+                {"role": "user", "content": messaggio_utente},
             ],
             response_format={"type": "json_object"},
             temperature=0,
