@@ -112,7 +112,7 @@ def run_seed():
     from blueprints.dashboard.routes import FISCAL_PARAM_DEFAULTS
 
     FE_DEMO_VALUES = {
-        "fe_denominazione": "AlfaMeccanica SpA",
+        "fe_denominazione": "IRON SEGNALETICA",
         "fe_piva": "01234567890",
         "fe_codice_fiscale": "01234567890",
         "fe_regime_fiscale": "RF01",

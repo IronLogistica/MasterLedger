@@ -26,6 +26,6 @@ class Config:
 
     # Nome Codice azienda / Cliente — configurabile per riutilizzare l'app con più clienti
     COMPANY_CODE = os.environ.get("COMPANY_CODE", "1000")
-    COMPANY_NAME = os.environ.get("COMPANY_NAME", "AlfaMeccanica SpA")
+    COMPANY_NAME = os.environ.get("COMPANY_NAME", "IRON SEGNALETICA")
 
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)

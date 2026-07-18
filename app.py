@@ -72,18 +72,21 @@ def create_app(config_class=Config):
         run_seed()
         print("Database popolato con dati di partenza.")
 
-    # ── Bootstrap automatico (Railway): crea tabelle + utenti se mancano ──
+    # ── Bootstrap automatico (Railway): crea tabelle + utenti garantiti ──
     with app.app_context():
         try:
             db.create_all()
-            if not User.query.filter_by(username="Angelo").first():
-                u = User(username="Angelo", full_name="Angelo", role="operatore")
-                u.set_password("Angelo1234")
-                db.session.add(u)
-            if not User.query.filter_by(username="Maurizio").first():
-                u = User(username="Maurizio", full_name="Maurizio", role="commercialista")
-                u.set_password("Maurizio1234")
-                db.session.add(u)
+            for uname, pwd, role in (
+                ("Angelo", "Angelo1234", "operatore"),
+                ("Maurizio", "Maurizio1234", "commercialista"),
+            ):
+                u = User.query.filter(db.func.lower(User.username) == uname.lower()).first()
+                if u is None:
+                    u = User(username=uname, full_name=uname, role=role)
+                    db.session.add(u)
+                # Garantisce che la password sia sempre quella prevista
+                u.set_password(pwd)
+                u.is_active_flag = True
             db.session.commit()
         except Exception:
             db.session.rollback()
