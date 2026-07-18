@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Produzione Completata{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🏭 Produzione Completata — Costo del Prodotto (COGM) <span class="tx-code">Ponte verso MasterProduction</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Registrazione <strong>periodica</strong> (tipicamente mensile), a costo standard, finché
+      <strong>MasterProduction</strong> non è pronto a fornire il costo preciso per ordine di produzione.
+      Genera: <span class="mono">Dare 160000 Prodotti Finiti = Materie Prime + Manodopera + Costi Indiretti</span>,
+      <span class="mono">Avere 150000 Materie Prime</span> (consumo reale di magazzino) e
+      <span class="mono">Avere 430000 Variazione Rimanenze PF</span> (manodopera e costi indiretti capitalizzati —
+      già spesati altrove a conto economico, qui si "recupera" la quota finita a valore di magazzino).
+    </div>
+    <div class="theory-note" style="margin-bottom:14px;">
+      <strong>Da dove prendere gli importi, oggi (prima di MasterProduction):</strong><br>
+      • <strong>Materie prime consumate</strong>: stima/consuntivo del periodo.<br>
+      • <strong>Manodopera diretta</strong>: leggila da MasterWork → pagina "Analisi Tempi" (colonna Totale Fatturato/ore del reparto saldatura).<br>
+      • <strong>Costi indiretti di produzione</strong> (es. taglio e foratura, oggi gestiti da MasterProduction non ancora pronto):
+      trattali come pool di costo <strong>fisso mensile</strong> (ammortamento macchine, energia, manutenzione del reparto carpenteria)
+      e spalmalo in proporzione alla produzione del mese — è una stima ragionevole, non un costo unitario preciso.
+    </div>
+
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Prodotto Finito <span class="req">*</span></label>
+          <select name="material_id" required>
+            <option value="">—</option>
+            {% for m in materiali_finiti %}
+            <option value="{{ m.id }}">{{ m.code }} — {{ m.description }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Periodo</label><input type="text" name="period_label" placeholder="es. Luglio 2026"></div>
+        <div class="form-group"><label>Quantità prodotta <span class="req">*</span></label><input type="number" step="0.001" name="qty_produced" required></div>
+      </div>
+
+      <div class="form-grid" style="margin-top:8px;">
+        <div class="form-group"><label>Materie prime consumate (€)</label><input type="number" step="0.01" name="raw_material_cost" placeholder="0,00"></div>
+        <div class="form-group"><label>Manodopera diretta (€)</label><input type="number" step="0.01" name="direct_labor_cost" placeholder="da Analisi Tempi (MasterWork)"></div>
+        <div class="form-group"><label>Costi indiretti di produzione (€)</label><input type="number" step="0.01" name="overhead_cost" placeholder="quota mensile taglio/foratura"></div>
+      </div>
+
+      <div class="form-group" style="margin-top:8px;">
+        <label>Note</label>
+        <input type="text" name="notes" placeholder="es. base di allocazione usata per i costi indiretti">
+      </div>
+
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Registra Produzione Completata</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Ultime registrazioni</div>
+  <div class="card-body">
+    {% if ultime %}
+    <table class="masterledger-table">
+      <thead><tr><th>Numero</th><th>Data</th><th>Periodo</th><th>Prodotto</th><th class="td-num">Qtà</th><th class="td-num">Materie Prime</th><th class="td-num">Manodopera</th><th class="td-num">Costi Indiretti</th><th class="td-num">Totale COGM</th><th>Scrittura</th></tr></thead>
+      <tbody>
+        {% for p in ultime %}
+        <tr>
+          <td class="mono fw-bold">{{ p.doc_number }}</td>
+          <td>{{ p.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ p.period_label or '—' }}</td>
+          <td>{{ p.material.code }} — {{ p.material.description }}</td>
+          <td class="td-num">{{ '%.0f'|format(p.qty_produced) }}</td>
+          <td class="td-num">{{ '%.2f'|format(p.raw_material_cost) }} €</td>
+          <td class="td-num">{{ '%.2f'|format(p.direct_labor_cost) }} €</td>
+          <td class="td-num">{{ '%.2f'|format(p.overhead_cost) }} €</td>
+          <td class="td-num fw-bold">{{ '%.2f'|format(p.total_cogm) }} €</td>
+          <td>{% if p.journal_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=p.journal_entry_id) }}">{{ p.journal_entry.doc_number }}</a>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna produzione registrata.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
