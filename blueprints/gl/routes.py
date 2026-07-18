@@ -104,9 +104,11 @@ def ai_suggerisci():
     file_pdf = request.files.get("documento")
     if file_pdf is not None and file_pdf.filename:
         descrizione = (request.form.get("descrizione") or "").strip()
+        tipo_documento = (request.form.get("tipo_documento") or "").strip() or None
     else:
         payload = request.get_json(silent=True) or {}
         descrizione = (payload.get("descrizione") or "").strip()
+        tipo_documento = (payload.get("tipo_documento") or "").strip() or None
         file_pdf = None
 
     testo_documento = None
@@ -128,7 +130,8 @@ def ai_suggerisci():
     accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
 
     try:
-        suggerimento = suggerisci_scrittura(descrizione, accounts, testo_documento=testo_documento)
+        suggerimento = suggerisci_scrittura(descrizione, accounts, testo_documento=testo_documento,
+                                             tipo_documento=tipo_documento)
     except AISuggestionError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
