@@ -39,6 +39,9 @@
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.goods_receipts' }}" href="{{ url_for('mm.goods_receipts') }}">📥 Entrata merci</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.invoice_verification' }}" href="{{ url_for('mm.invoice_verification') }}">🔍 Verifica fattura <span class="badge">3-way</span></a>
 
+    <div class="sidebar-title">Produzione (ponte verso MasterProduction)</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='production.completata' }}" href="{{ url_for('production.completata') }}">🏭 Produzione Completata (COGM)</a>
+
     <div class="sidebar-title">Anagrafiche</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='parties.party_list' }}" href="{{ url_for('parties.party_list') }}">🤝 Soggetti Economici</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='materials.material_list' }}" href="{{ url_for('materials.material_list') }}">🏷️ Articoli</a>
