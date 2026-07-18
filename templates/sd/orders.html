@@ -34,7 +34,7 @@
         <tr>
           <td class="mono fw-bold">{{ o.doc_number }}</td>
           <td>{{ o.doc_date.strftime('%d/%m/%Y') }}</td>
-          <td>{{ o.customer.name }}</td>
+          <td>{{ o.party.name }}</td>
           <td class="mono">{{ o.quotation.doc_number if o.quotation else '—' }}</td>
           <td class="td-num">{{ '%.2f'|format(o.total_net) }}</td>
           <td class="td-num">{{ '%.0f'|format(o.qty_delivered_total) }} pz</td>

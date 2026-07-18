@@ -15,7 +15,7 @@
         <select name="order_id" required>
           <option value="">—</option>
           {% for o in open_orders %}
-          <option value="{{ o.id }}">{{ o.doc_number }} — {{ o.customer.name }} ({{ '%.2f'|format(o.total_net) }} € netto)</option>
+          <option value="{{ o.id }}">{{ o.doc_number }} — {{ o.party.name }} ({{ '%.2f'|format(o.total_net) }} € netto)</option>
           {% endfor %}
         </select>
       </div>
@@ -35,7 +35,7 @@
         <tr>
           <td class="mono fw-bold">{{ d.doc_number }}</td>
           <td>{{ d.doc_date.strftime('%d/%m/%Y') }}</td>
-          <td>{{ d.customer.name }}</td>
+          <td>{{ d.party.name }}</td>
           <td class="mono">{{ d.order.doc_number }}</td>
           <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
           <td class="td-num color-red">{{ '%.2f'|format(d.total_cogs) }}</td>

@@ -17,7 +17,7 @@
           <select name="po_id" required>
             <option value="">—</option>
             {% for p in open_pos %}
-            <option value="{{ p.id }}">{{ p.doc_number }} — {{ p.vendor.name }} ({{ p.status }})</option>
+            <option value="{{ p.id }}">{{ p.doc_number }} — {{ p.party.name }} ({{ p.status }})</option>
             {% endfor %}
           </select>
         </div>
@@ -41,7 +41,7 @@
           <td class="mono fw-bold">{{ g.doc_number }}</td>
           <td>{{ g.doc_date.strftime('%d/%m/%Y') }}</td>
           <td class="mono">{{ g.po.doc_number }}</td>
-          <td>{{ g.po.vendor.name }}</td>
+          <td>{{ g.po.party.name }}</td>
           <td>{{ g.ddt_vendor_ref or '—' }}</td>
           <td>{% if g.journal_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=g.journal_entry_id) }}">{{ g.journal_entry.doc_number }}</a>{% else %}—{% endif %}</td>
         </tr>

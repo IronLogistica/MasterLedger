@@ -16,7 +16,7 @@
         <tr>
           <td class="mono">{{ r.delivery.doc_number }}</td>
           <td><a class="mono" href="{{ url_for('gl.entry_detail', entry_id=r.delivery.billing_entry_id) }}">{{ r.delivery.billing_entry.doc_number }}</a></td>
-          <td>{{ r.delivery.customer.name }}</td>
+          <td>{{ r.delivery.party.name }}</td>
           <td class="td-num">{{ '%.2f'|format(r.revenue) }}</td>
           <td class="td-num color-red">{{ '%.2f'|format(r.cogs) }}</td>
           <td class="td-num {{ 'color-green' if r.margin >= 0 else 'color-red' }} fw-bold">{{ '%.2f'|format(r.margin) }}</td>

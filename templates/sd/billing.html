@@ -17,7 +17,7 @@
         <tr>
           <td class="mono fw-bold">{{ d.doc_number }}</td>
           <td>{{ d.doc_date.strftime('%d/%m/%Y') }}</td>
-          <td>{{ d.customer.name }}</td>
+          <td>{{ d.party.name }}</td>
           <td class="mono">{{ d.order.doc_number }}</td>
           <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
           <td>
@@ -44,7 +44,7 @@
         {% for d in billed %}
         <tr>
           <td class="mono">{{ d.doc_number }}</td>
-          <td>{{ d.customer.name }}</td>
+          <td>{{ d.party.name }}</td>
           <td><a class="mono fw-bold" href="{{ url_for('gl.entry_detail', entry_id=d.billing_entry_id) }}">{{ d.billing_entry.doc_number }}</a></td>
           <td class="td-num">{{ '%.2f'|format(d.billing_entry.gross_amount or 0) }}</td>
         </tr>

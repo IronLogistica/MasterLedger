@@ -32,7 +32,7 @@
           <select name="linked_invoice_id">
             <option value="">-- Nessun riferimento --</option>
             {% for inv in dr_invoices %}
-            <option value="{{ inv.id }}">{{ inv.doc_number }} — {{ inv.reference or '' }} — {{ inv.customer.name if inv.customer else '' }} ({{ inv.doc_date.strftime('%d/%m/%Y') }})</option>
+            <option value="{{ inv.id }}">{{ inv.doc_number }} — {{ inv.reference or '' }} — {{ inv.party.name if inv.party else '' }} ({{ inv.doc_date.strftime('%d/%m/%Y') }})</option>
             {% endfor %}
           </select>
         </div>

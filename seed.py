@@ -14,7 +14,7 @@ Crea:
 """
 from extensions import db
 from models import (
-    Account, User, OperatingSite, WarehouseArea, Vendor, Customer, CostCenter,
+    Account, User, OperatingSite, WarehouseArea, EconomicSubject, CostCenter,
     DocumentSequence, FiscalParameter,
 )
 
@@ -91,11 +91,11 @@ def run_seed():
         ])
 
     # ── Fornitori / Clienti / Centro di costo demo ──────────────
-    if not Vendor.query.filter_by(code="FORN-001").first():
-        db.session.add(Vendor(code="FORN-001", name="Acciai Lombardi SpA", piva="02345678901", payment_terms="Netto 30gg"))
-    if not Customer.query.filter_by(code="CUST-001").first():
-        db.session.add(Customer(
-            code="CUST-001", name="Ferrari Meccanica SpA", piva="03456789012", payment_terms="Netto 30gg",
+    if not EconomicSubject.query.filter_by(code="FORN-001").first():
+        db.session.add(EconomicSubject(code="FORN-001", name="Acciai Lombardi SpA", piva="02345678901", payment_terms="Netto 30gg", is_supplier=True))
+    if not EconomicSubject.query.filter_by(code="CUST-001").first():
+        db.session.add(EconomicSubject(
+            code="CUST-001", name="Ferrari Meccanica SpA", piva="03456789012", payment_terms="Netto 30gg", is_customer=True,
             # Dati fiscali di esempio, così Fattura cliente → XML FatturaPA funziona
             # subito in demo (CAMBIA con i dati reali del cliente).
             codice_fiscale="03456789012", indirizzo="Via dell'Industria 45", cap="41100",

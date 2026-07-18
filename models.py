@@ -139,9 +139,8 @@ class JournalEntry(db.Model):
     is_paid = db.Column(db.Boolean, default=False)
     paid_by_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
 
-    # Anagrafica collegata (per filtrare "fatture aperte per fornitore/cliente")
-    vendor_id = db.Column(db.Integer, db.ForeignKey("vendors.id"), nullable=True)
-    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=True)
+    # Soggetto economico unico, cliente e/o fornitore.
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=True)
     gross_amount = db.Column(db.Numeric(14, 2), nullable=True)  # importo totale fattura, per comodità
 
     # Aliquota IVA della fattura (unica, per l'MVP — una sola riga/aliquota).
@@ -166,8 +165,7 @@ class JournalEntry(db.Model):
     linked_invoice = db.relationship("JournalEntry", remote_side="JournalEntry.id",
                                      foreign_keys=[linked_invoice_id])
 
-    vendor = db.relationship("Vendor")
-    customer = db.relationship("Customer")
+    party = db.relationship("EconomicSubject")
 
     lines = db.relationship("JournalLine", backref="entry", cascade="all, delete-orphan")
     created_by = db.relationship("User")
@@ -238,42 +236,48 @@ class InvoiceLine(db.Model):
 # ══════════════════════════════════════════════════════════════
 # ANAGRAFICHE FORNITORE / CLIENTE
 # ══════════════════════════════════════════════════════════════
-class Vendor(db.Model):
-    __tablename__ = "vendors"
+class EconomicSubject(db.Model):
+    """Anagrafica unica: può operare contemporaneamente come cliente e fornitore."""
+    __tablename__ = "economic_subjects"
+
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(20), unique=True, nullable=False)
-    name = db.Column(db.String(120), nullable=False)
-    piva = db.Column(db.String(20))
-    payment_terms = db.Column(db.String(40), default="Netto 30gg")
-    active = db.Column(db.Boolean, default=True)
-
-
-class Customer(db.Model):
-    __tablename__ = "customers"
-    id = db.Column(db.Integer, primary_key=True)
-    code = db.Column(db.String(20), unique=True, nullable=False)
-    name = db.Column(db.String(120), nullable=False)
-    piva = db.Column(db.String(20))
-    payment_terms = db.Column(db.String(40), default="Netto 30gg")
-    active = db.Column(db.Boolean, default=True)
-
-    # ── Dati anagrafici/fiscali necessari per generare l'XML FatturaPA
-    # (CessionarioCommittente) — vedi services/fatturapa.py. Nessuno di
-    # questi è richiesto per usare l'app come simulatore didattico: servono
-    # solo quando si genera davvero l'XML da mandare in conservazione/SdI
-    # (tramite upload manuale su Aruba o altro intermediario).
+    name = db.Column(db.String(120), nullable=False)  # denominazione o nome completo
+    subject_type = db.Column(db.String(12), nullable=False, default="azienda")  # azienda | persona
+    is_customer = db.Column(db.Boolean, nullable=False, default=False)
+    is_supplier = db.Column(db.Boolean, nullable=False, default=False)
+    piva = db.Column(db.String(20), index=True)
     codice_fiscale = db.Column(db.String(16))
     indirizzo = db.Column(db.String(120))
     cap = db.Column(db.String(10))
     comune = db.Column(db.String(80))
-    provincia = db.Column(db.String(2))   # sigla, es. "MI" — non richiesta se nazione != IT
+    provincia = db.Column(db.String(2))
     nazione = db.Column(db.String(2), default="IT")
-
-    # CodiceDestinatario a 7 cifre (default "0000000" = recapito solo tramite
-    # PEC, come richiesto dalle specifiche tecniche SdI quando il cliente
-    # non ha un codice destinatario proprio).
+    email = db.Column(db.String(120))
+    pec = db.Column(db.String(120))
+    telefono = db.Column(db.String(40))
     codice_destinatario = db.Column(db.String(7), default="0000000")
-    pec_destinatario = db.Column(db.String(120))
+    payment_terms = db.Column(db.String(40), default="Netto 30gg")
+    iban = db.Column(db.String(34))
+    active = db.Column(db.Boolean, default=True)
+
+    @property
+    def role_label(self):
+        if self.is_customer and self.is_supplier:
+            return "Cliente e fornitore"
+        if self.is_customer:
+            return "Cliente"
+        if self.is_supplier:
+            return "Fornitore"
+        return "Da qualificare"
+
+    @property
+    def pec_destinatario(self):
+        return self.pec
+
+    @pec_destinatario.setter
+    def pec_destinatario(self, value):
+        self.pec = value
 
 
 
@@ -427,13 +431,13 @@ class Quotation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
     status = db.Column(db.String(15), default="aperto")  # aperto | convertito | scaduto
     note = db.Column(db.String(255))
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    customer = db.relationship("Customer")
+    party = db.relationship("EconomicSubject")
     lines = db.relationship("QuotationLine", backref="quotation", cascade="all, delete-orphan")
 
     @property
@@ -457,14 +461,14 @@ class SalesOrder(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
     quotation_id = db.Column(db.Integer, db.ForeignKey("quotations.id"), nullable=True)
     status = db.Column(db.String(15), default="aperto")  # aperto | consegnato
     note = db.Column(db.String(255))
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    customer = db.relationship("Customer")
+    party = db.relationship("EconomicSubject")
     quotation = db.relationship("Quotation", backref="orders")
     lines = db.relationship("SalesOrderLine", backref="order", cascade="all, delete-orphan")
 
@@ -501,14 +505,14 @@ class Delivery(db.Model):
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
     order_id = db.Column(db.Integer, db.ForeignKey("sales_orders.id"), nullable=False)
-    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
     cogs_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     billing_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     order = db.relationship("SalesOrder", backref="deliveries")
-    customer = db.relationship("Customer")
+    party = db.relationship("EconomicSubject")
     cogs_entry = db.relationship("JournalEntry", foreign_keys=[cogs_entry_id])
     billing_entry = db.relationship("JournalEntry", foreign_keys=[billing_entry_id])
     lines = db.relationship("DeliveryLine", backref="delivery", cascade="all, delete-orphan")
@@ -547,12 +551,12 @@ class PurchaseOrder(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    vendor_id = db.Column(db.Integer, db.ForeignKey("vendors.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
     note = db.Column(db.String(255))
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-    vendor = db.relationship("Vendor")
+    party = db.relationship("EconomicSubject")
     lines = db.relationship("PurchaseOrderLine", backref="po", cascade="all, delete-orphan")
 
     @property

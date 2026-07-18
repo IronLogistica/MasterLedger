@@ -16,7 +16,7 @@
     {% if pos %}
     {% for p in pos %}
     <div class="card" style="margin-bottom:14px;">
-      <div class="card-header" style="font-size:13.5px;">{{ p.doc_number }} — {{ p.vendor.name }} <span class="tx-code">{{ p.status|upper }}</span></div>
+      <div class="card-header" style="font-size:13.5px;">{{ p.doc_number }} — {{ p.party.name }} <span class="tx-code">{{ p.status|upper }}</span></div>
       <div class="card-body">
         <form method="POST">
           <input type="hidden" name="po_id" value="{{ p.id }}">

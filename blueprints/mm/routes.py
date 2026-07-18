@@ -24,7 +24,7 @@ from flask_login import login_required, current_user
 
 from extensions import db
 from models import (
-    Account, Vendor, Material, PurchaseOrder, PurchaseOrderLine,
+    Account, EconomicSubject, Material, PurchaseOrder, PurchaseOrderLine,
     GoodsReceipt, GoodsReceiptLine,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
@@ -47,7 +47,7 @@ def _acc(code):
 @mm_bp.route("/purchase-orders", methods=["GET", "POST"])
 @login_required
 def purchase_orders():
-    vendors = Vendor.query.filter_by(active=True).order_by(Vendor.name).all()
+    vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
     materials = Material.query.filter_by(active=True).order_by(Material.code).all()
 
     if request.method == "POST":
@@ -83,7 +83,7 @@ def purchase_orders():
                     doc_number=DocumentSequence.next_number("OA", "33"),
                     doc_date=datetime.strptime(request.form.get("doc_date"), "%Y-%m-%d").date()
                     if request.form.get("doc_date") else datetime.utcnow().date(),
-                    vendor_id=vendor_id,
+                    economic_subject_id=vendor_id,
                     note=request.form.get("note", "").strip(),
                     created_by_id=current_user.id,
                 )
@@ -266,12 +266,12 @@ def invoice_verification():
                             f"(three-way match OK)",
                 lines=journal_lines, source_module="ACQUISTI",
                 reference=invoice_ref or po.doc_number, created_by_id=current_user.id,
-                vendor_id=po.vendor_id, gross_amount=gross,
+                economic_subject_id=po.economic_subject_id, gross_amount=gross,
             )
             db.session.commit()
             flash(f"✅ Three-way match superato. Fattura {entry.doc_number} registrata — "
                   f"{float(gross):.2f} € (imponibile {float(total_net):.2f} + IVA {float(total_vat):.2f}). "
-                  f"Debito v/{po.vendor.name} aperto in Pagamenti fornitori.", "success")
+                  f"Debito v/{po.party.name} aperto in Pagamenti fornitori.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
         except (UnbalancedEntryError, ValueError) as e:
             db.session.rollback()

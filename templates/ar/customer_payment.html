@@ -13,7 +13,7 @@
           <tr>
             <td><input type="checkbox" name="invoice_ids[]" value="{{ inv.id }}"></td>
             <td class="mono">{{ inv.doc_number }}</td>
-            <td>{{ inv.customer.name if inv.customer else '—' }}</td>
+            <td>{{ inv.party.name if inv.party else '—' }}</td>
             <td>{{ inv.doc_date.strftime('%d/%m/%Y') }}</td>
             <td class="td-num">{{ "%.2f"|format(inv.gross_amount or 0) }} €</td>
           </tr>

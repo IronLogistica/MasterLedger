@@ -3,7 +3,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, Vendor, JournalEntry
+from models import Account, EconomicSubject, JournalEntry
 from services.posting import post_journal_entry, UnbalancedEntryError
 
 ap_bp = Blueprint("ap", __name__, template_folder="../../templates/ap")
@@ -20,7 +20,7 @@ def _get_account_by_code(code):
 @login_required
 def supplier_invoice():
     """Fattura fornitore — Registrazione Fattura Fornitore."""
-    vendors = Vendor.query.filter_by(active=True).order_by(Vendor.name).all()
+    vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
     expense_accounts = Account.query.filter_by(account_type="costo", active=True).order_by(Account.code).all()
 
     if request.method == "POST":
@@ -55,7 +55,7 @@ def supplier_invoice():
                 doc_type="KR", prefix="19",
                 doc_date=invoice_date, description=description or f"Fattura Fornitore {invoice_number}",
                 lines=lines, source_module="LEDGER", reference=invoice_number,
-                created_by_id=current_user.id, vendor_id=vendor_id, gross_amount=gross,
+                created_by_id=current_user.id, economic_subject_id=vendor_id, gross_amount=gross,
             )
             flash(f"Fattura fornitore registrata: Doc. {entry.doc_number} — Totale {gross:.2f} €.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
@@ -105,13 +105,15 @@ def supplier_invoice_import():
             descr = request.form.get("descrizione", "").strip()
 
             # Fornitore: match per P.IVA, altrimenti creato al volo
-            vendor = Vendor.query.filter_by(piva=piva).first() if piva else None
+            vendor = EconomicSubject.query.filter_by(piva=piva).first() if piva else None
             if vendor is None:
-                next_code = f"F{Vendor.query.count() + 1:04d}"
-                vendor = Vendor(code=next_code, name=denominazione or f"Fornitore {piva}",
-                                piva=piva or None)
+                next_code = f"F{EconomicSubject.query.count() + 1:04d}"
+                vendor = EconomicSubject(code=next_code, name=denominazione or f"Fornitore {piva}",
+                                piva=piva or None, is_supplier=True)
                 db.session.add(vendor)
                 db.session.flush()
+
+            vendor.is_supplier = True
 
             if tipo_doc == "TD04":
                 # Nota di credito fornitore: segni invertiti
@@ -137,7 +139,7 @@ def supplier_invoice_import():
                 doc_date=invoice_date,
                 description=descr or f"{label} {numero} — {denominazione}",
                 lines=lines, source_module="LEDGER", reference=numero,
-                created_by_id=current_user.id, vendor_id=vendor.id, gross_amount=gross,
+                created_by_id=current_user.id, economic_subject_id=vendor.id, gross_amount=gross,
             )
             flash(f"{label} importata da XML: Doc. {entry.doc_number} — "
                   f"{denominazione}, n. {numero}, totale {gross:.2f} €.", "success")
@@ -171,7 +173,7 @@ def supplier_invoice_import():
             return render_template("ap/supplier_invoice_import.html", parsed=None,
                                    expense_accounts=expense_accounts)
 
-        vendor_match = Vendor.query.filter_by(piva=parsed["cedente_piva"]).first() if parsed["cedente_piva"] else None
+        vendor_match = EconomicSubject.query.filter_by(piva=parsed["cedente_piva"]).first() if parsed["cedente_piva"] else None
         return render_template("ap/supplier_invoice_import.html", parsed=parsed,
                                vendor_match=vendor_match,
                                expense_accounts=expense_accounts)

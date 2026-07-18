@@ -1,0 +1,3 @@
+{% extends "base.html" %}{% block title %}Modifica Soggetto Economico{% endblock %}{% block content %}
+<div class="card"><div class="card-header">🤝 Modifica — {{ party.name }}</div><div class="card-body"><form method="POST">{% include 'parties/_form.html' %}<div class="btn-row"><button class="btn btn-primary">Salva</button><a class="btn btn-ghost" href="{{ url_for('parties.party_list') }}">Annulla</a></div></form></div></div>
+{% endblock %}

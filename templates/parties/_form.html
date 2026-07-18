@@ -1,0 +1,20 @@
+<div class="form-grid">
+  <div class="form-group"><label>Codice <span class="req">*</span></label><input name="code" required value="{{ party.code if party else '' }}" placeholder="es. SE-001"></div>
+  <div class="form-group"><label>Denominazione <span class="req">*</span></label><input name="name" required value="{{ party.name if party else '' }}"></div>
+  <div class="form-group"><label>Tipo</label><select name="subject_type"><option value="azienda" {{ 'selected' if not party or party.subject_type == 'azienda' }}>Azienda</option><option value="persona" {{ 'selected' if party and party.subject_type == 'persona' }}>Persona fisica</option></select></div>
+  <div class="form-group"><label>Ruoli <span class="req">*</span></label><label><input type="checkbox" name="is_customer" {{ 'checked' if party and party.is_customer }}> Cliente</label> &nbsp; <label><input type="checkbox" name="is_supplier" {{ 'checked' if party and party.is_supplier }}> Fornitore</label></div>
+  <div class="form-group"><label>Partita IVA</label><input name="piva" maxlength="20" value="{{ party.piva if party else '' }}"></div>
+  <div class="form-group"><label>Codice fiscale</label><input name="codice_fiscale" maxlength="16" value="{{ party.codice_fiscale if party else '' }}"></div>
+  <div class="form-group"><label>Indirizzo</label><input name="indirizzo" value="{{ party.indirizzo if party else '' }}"></div>
+  <div class="form-group"><label>CAP</label><input name="cap" maxlength="10" value="{{ party.cap if party else '' }}"></div>
+  <div class="form-group"><label>Comune</label><input name="comune" value="{{ party.comune if party else '' }}"></div>
+  <div class="form-group"><label>Provincia</label><input name="provincia" maxlength="2" value="{{ party.provincia if party else '' }}"></div>
+  <div class="form-group"><label>Nazione</label><input name="nazione" maxlength="2" value="{{ party.nazione if party else 'IT' }}"></div>
+  <div class="form-group"><label>Telefono</label><input name="telefono" value="{{ party.telefono if party else '' }}"></div>
+  <div class="form-group"><label>Email</label><input type="email" name="email" value="{{ party.email if party else '' }}"></div>
+  <div class="form-group"><label>PEC</label><input type="email" name="pec" value="{{ party.pec if party else '' }}"></div>
+  <div class="form-group"><label>Codice destinatario</label><input name="codice_destinatario" maxlength="7" value="{{ party.codice_destinatario if party else '0000000' }}"></div>
+  <div class="form-group"><label>Condizioni di pagamento</label><input name="payment_terms" value="{{ party.payment_terms if party else 'Netto 30gg' }}"></div>
+  <div class="form-group"><label>IBAN</label><input name="iban" maxlength="34" value="{{ party.iban if party else '' }}"></div>
+  <div class="form-group"><label><input type="checkbox" name="active" {{ 'checked' if not party or party.active }}> Attivo</label></div>
+</div>

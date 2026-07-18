@@ -4,7 +4,7 @@ Revision ID: a1b2c3d4e5f6
 Revises: f7ed3b5853f8
 Create Date: 2026-07-06 00:00:00.000000
 
-Aggiunge i campi anagrafici/fiscali sul Customer necessari a costruire il
+Aggiunge i campi anagrafici/fiscali sul EconomicSubject necessari a costruire il
 blocco CessionarioCommittente dell'XML FatturaPA (services/fatturapa.py),
 e la colonna vat_rate su JournalEntry per salvare l'aliquota IVA della
 fattura senza doverla ricalcolare per differenza.

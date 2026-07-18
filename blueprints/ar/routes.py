@@ -6,7 +6,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, Customer, JournalEntry, InvoiceLine
+from models import Account, EconomicSubject, JournalEntry, InvoiceLine
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.fatturapa import build_fatturapa_xml, FatturaPAConfigError
 
@@ -204,7 +204,7 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
             doc_type=doc_type, prefix=prefix,
             doc_date=invoice_date, description=description or f"{doc_label} {invoice_number}",
             lines=journal_lines, source_module="LEDGER", reference=invoice_number,
-            created_by_id=current_user.id, customer_id=customer_id, gross_amount=gross,
+            created_by_id=current_user.id, economic_subject_id=customer_id, gross_amount=gross,
         )
 
         # Righe commerciali (alimentano DettaglioLinee/DatiRiepilogo dell'XML)
@@ -215,7 +215,7 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
                                        account_id=r["account_id"]))
         if doc_type == "DG" and linked_invoice_id:
             linked = JournalEntry.query.get(linked_invoice_id)
-            if linked and linked.doc_type == "DR" and linked.customer_id == customer_id:
+            if linked and linked.doc_type == "DR" and linked.economic_subject_id == customer_id:
                 entry.linked_invoice_id = linked.id
         db.session.commit()
 
@@ -232,7 +232,7 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
 @login_required
 def customer_invoice():
     """Fattura cliente — Registrazione Fattura Cliente (multi-riga, multi-aliquota)."""
-    customers = Customer.query.filter_by(active=True).order_by(Customer.name).all()
+    customers = EconomicSubject.query.filter_by(active=True, is_customer=True).order_by(EconomicSubject.name).all()
 
     if request.method == "POST":
         return _register_ar_document("DR", "14", request.form, customers, "ar/customer_invoice.html")
@@ -251,7 +251,7 @@ def customer_credit_note():
     l'XML esce con TipoDocumento TD04 e — se indicata — la fattura
     originale nel blocco <DatiFattureCollegate>.
     """
-    customers = Customer.query.filter_by(active=True).order_by(Customer.name).all()
+    customers = EconomicSubject.query.filter_by(active=True, is_customer=True).order_by(EconomicSubject.name).all()
     dr_invoices = (JournalEntry.query
                    .filter_by(doc_type="DR", is_reversed=False)
                    .order_by(JournalEntry.doc_date.desc())
@@ -356,7 +356,7 @@ def customer_fiscali(customer_id):
     cliente (CessionarioCommittente): P.IVA/CF, indirizzo, e Codice
     Destinatario oppure PEC per il recapito tramite SdI.
     """
-    customer = Customer.query.get_or_404(customer_id)
+    customer = EconomicSubject.query.get_or_404(customer_id)
 
     if request.method == "POST":
         piva = request.form.get("piva", "").strip() or None

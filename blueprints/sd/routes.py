@@ -23,7 +23,7 @@ from flask_login import login_required, current_user
 
 from extensions import db
 from models import (
-    Account, Customer, Material, Quotation, QuotationLine,
+    Account, EconomicSubject, Material, Quotation, QuotationLine,
     SalesOrder, SalesOrderLine, Delivery, DeliveryLine, InvoiceLine,
     JournalEntry,
 )
@@ -70,7 +70,7 @@ def _parse_lines(form, materials):
 @sd_bp.route("/quotations", methods=["GET", "POST"])
 @login_required
 def quotations():
-    customers = Customer.query.filter_by(active=True).order_by(Customer.name).all()
+    customers = EconomicSubject.query.filter_by(active=True, is_customer=True).order_by(EconomicSubject.name).all()
     materials = Material.query.filter_by(active=True).order_by(Material.code).all()
 
     if request.method == "POST":
@@ -87,7 +87,7 @@ def quotations():
                     doc_number=DocumentSequence.next_number("QT", "30"),
                     doc_date=datetime.strptime(request.form.get("doc_date"), "%Y-%m-%d").date()
                     if request.form.get("doc_date") else datetime.utcnow().date(),
-                    customer_id=customer_id,
+                    economic_subject_id=customer_id,
                     note=request.form.get("note", "").strip(),
                     created_by_id=current_user.id,
                 )
@@ -117,7 +117,7 @@ def quotation_convert(quot_id):
     from models import DocumentSequence
     o = SalesOrder(
         doc_number=DocumentSequence.next_number("OR", "31"),
-        customer_id=q.customer_id, quotation_id=q.id,
+        economic_subject_id=q.economic_subject_id, quotation_id=q.id,
         note=f"Da preventivo {q.doc_number}",
         created_by_id=current_user.id,
     )
@@ -138,7 +138,7 @@ def quotation_convert(quot_id):
 @sd_bp.route("/orders", methods=["GET", "POST"])
 @login_required
 def orders():
-    customers = Customer.query.filter_by(active=True).order_by(Customer.name).all()
+    customers = EconomicSubject.query.filter_by(active=True, is_customer=True).order_by(EconomicSubject.name).all()
     materials = Material.query.filter_by(active=True).order_by(Material.code).all()
 
     if request.method == "POST":
@@ -153,7 +153,7 @@ def orders():
                 from models import DocumentSequence
                 o = SalesOrder(
                     doc_number=DocumentSequence.next_number("OR", "31"),
-                    customer_id=customer_id,
+                    economic_subject_id=customer_id,
                     note=request.form.get("note", "").strip(),
                     created_by_id=current_user.id,
                 )
@@ -210,7 +210,7 @@ def deliveries():
             from models import DocumentSequence
             d = Delivery(
                 doc_number=DocumentSequence.next_number("DL", "32"),
-                order_id=o.id, customer_id=o.customer_id,
+                order_id=o.id, economic_subject_id=o.economic_subject_id,
                 created_by_id=current_user.id,
             )
             db.session.add(d)
@@ -307,7 +307,7 @@ def billing():
                 description=f"Fattura da DDT {d.doc_number} (ord. {d.order.doc_number})",
                 lines=journal_lines, source_module="VENDITE",
                 reference=d.doc_number, created_by_id=current_user.id,
-                customer_id=d.customer_id, gross_amount=gross,
+                economic_subject_id=d.economic_subject_id, gross_amount=gross,
                 vat_rate=(vat_rates.pop() if len(vat_rates) == 1 else None),
             )
             for n, (desc, net, rate) in enumerate(inv_rows, start=1):

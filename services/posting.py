@@ -17,7 +17,7 @@ class UnbalancedEntryError(Exception):
 
 
 def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_module="LEDGER",
-                        reference=None, created_by_id=None, vendor_id=None, customer_id=None,
+                        reference=None, created_by_id=None, economic_subject_id=None,
                         gross_amount=None, vat_rate=None, natura=None):
     """
     Crea e salva un documento contabile in partita doppia.
@@ -48,8 +48,7 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
         source_module=source_module,
         reference=reference,
         created_by_id=created_by_id,
-        vendor_id=vendor_id,
-        customer_id=customer_id,
+        economic_subject_id=economic_subject_id,
         gross_amount=gross_amount,
         vat_rate=vat_rate,
         natura=natura,

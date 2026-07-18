@@ -50,3 +50,14 @@ Il file `Procfile` è già incluso.
 | `DATABASE_URL` | Connessione PostgreSQL; senza valore viene usato SQLite locale |
 | `COMPANY_NAME` | Ragione sociale mostrata nell'app |
 | `COMPANY_CODE` | Codice interno dell'azienda |
+
+## Soggetti Economici
+L'anagrafica unica **Soggetti Economici** sostituisce la creazione separata di clienti e fornitori. Ogni soggetto può avere entrambi i ruoli. La maschera raccoglie solo i dati operativi: identificazione, recapiti, dati fiscali essenziali, condizioni di pagamento e IBAN.
+
+Dopo l'aggiornamento di un database già esistente, eseguire la migrazione prima dell'avvio dell'applicazione:
+
+```bash
+flask --app app db upgrade
+```
+
+La migrazione trasferisce gli attuali clienti e fornitori nella nuova anagrafica e collega lo storico dei documenti. Quando cliente e fornitore condividono la stessa Partita IVA, vengono uniti nello stesso soggetto con entrambi i ruoli.

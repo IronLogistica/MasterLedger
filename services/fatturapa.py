@@ -19,7 +19,7 @@ Dati necessari (raccolti da tre punti diversi dell'applicazione):
     di categoria "fatturazione elettronica" — Configurazione Fiscale,
     riservata al Commercialista.
   - Dati del Cessionario/Committente (il cliente): letti dall'anagrafica
-    Customer — vedi blueprints/ar/routes.py, rotta "dati fiscali cliente".
+    EconomicSubject — vedi blueprints/ar/routes.py, rotta "dati fiscali cliente".
   - Dati del documento: letti dal JournalEntry (doc_type="DR") e dalle sue
     JournalLine.
 
@@ -176,7 +176,7 @@ def build_fatturapa_xml(entry):
                          "e note di credito cliente (Nota di credito cliente/DG).")
     tipo_documento = "TD01" if entry.doc_type == "DR" else "TD04"
 
-    customer = entry.customer
+    customer = entry.party
     if customer is None:
         raise FatturaPAConfigError(
             "Questo documento non ha un Cliente collegato: impossibile generare l'XML."
