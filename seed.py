@@ -7,8 +7,7 @@ Uso:
 Crea:
   - Piano dei Conti essenziale (patrimoniali + economici, con cost_relevant
     impostato correttamente sui conti di costo/ricavo)
-  - Due utenti demo: uno 'operatore', uno 'commercialista'
-    (username/password stampati a schermo — CAMBIALI subito in produzione)
+  - Due utenti: Angelo (operatore) e Maurizio (commercialista)
   - Una sede operativa e 3 aree di magazzino di esempio (il Setup Magazzini già pronto)
   - Un paio di fornitori/clienti e un centro di costo, per poter provare
     subito Fattura fornitore/Fattura cliente/Prima nota senza dover compilare tutto da zero
@@ -61,14 +60,14 @@ def run_seed():
             db.session.add(DocumentSequence(doc_type=doc_type, prefix=prefix, current_number=0))
 
     # ── Utenti demo (DA CAMBIARE prima di un uso reale) ─────────
-    if not User.query.filter_by(username="operatore").first():
-        u1 = User(username="operatore", full_name="Mario Rossi (Operatore)", role="operatore")
-        u1.set_password("operatore123")
+    if not User.query.filter_by(username="Angelo").first():
+        u1 = User(username="Angelo", full_name="Angelo", role="operatore")
+        u1.set_password("Angelo1234")
         db.session.add(u1)
 
-    if not User.query.filter_by(username="commercialista").first():
-        u2 = User(username="commercialista", full_name="Dott.ssa Bianchi (Commercialista)", role="commercialista")
-        u2.set_password("commercialista123")
+    if not User.query.filter_by(username="Maurizio").first():
+        u2 = User(username="Maurizio", full_name="Maurizio", role="commercialista")
+        u2.set_password("Maurizio1234")
         db.session.add(u2)
 
     # ── Sede operativa e aree di magazzino di esempio (Setup Magazzini) ───

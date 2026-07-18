@@ -72,6 +72,22 @@ def create_app(config_class=Config):
         run_seed()
         print("Database popolato con dati di partenza.")
 
+    # ── Bootstrap automatico (Railway): crea tabelle + utenti se mancano ──
+    with app.app_context():
+        try:
+            db.create_all()
+            if not User.query.filter_by(username="Angelo").first():
+                u = User(username="Angelo", full_name="Angelo", role="operatore")
+                u.set_password("Angelo1234")
+                db.session.add(u)
+            if not User.query.filter_by(username="Maurizio").first():
+                u = User(username="Maurizio", full_name="Maurizio", role="commercialista")
+                u.set_password("Maurizio1234")
+                db.session.add(u)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     @app.errorhandler(403)
     def forbidden(e):
         return render_template("errors/403.html"), 403
