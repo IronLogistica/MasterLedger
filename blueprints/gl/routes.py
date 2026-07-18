@@ -5,7 +5,7 @@ from flask_login import login_required, current_user
 from extensions import db
 from models import Account, CostCenter, JournalEntry
 from services.posting import post_journal_entry, reverse_journal_entry, UnbalancedEntryError
-from services.ai_posting import suggerisci_scrittura, AISuggestionError
+from services.ai_posting import suggerisci_scrittura, estrai_testo_pdf, AISuggestionError
 
 gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
 
@@ -92,20 +92,43 @@ def journal_entry():
 def ai_suggerisci():
     """
     Suggerimento AI per la Prima Nota: prende una descrizione in linguaggio
-    naturale e propone le righe (conto, Dare/Avere, importo) da mostrare
-    PRE-COMPILATE nel form — l'utente le controlla e conferma lui stesso con
-    "Registra Documento". Questa rotta non scrive MAI su JournalEntry: non
-    passa da post_journal_entry, si limita a restituire un suggerimento.
+    naturale e/o un documento PDF caricato (es. una fattura) e propone le
+    righe (conto, Dare/Avere, importo) da mostrare PRE-COMPILATE nel form —
+    l'utente le controlla e conferma lui stesso con "Registra Documento".
+    Questa rotta non scrive MAI su JournalEntry: non passa da
+    post_journal_entry, si limita a restituire un suggerimento.
+
+    Accetta sia JSON semplice ({"descrizione": "..."}) sia multipart/form-data
+    (campo "descrizione" opzionale + campo file "documento" opzionale).
     """
-    payload = request.get_json(silent=True) or {}
-    descrizione = (payload.get("descrizione") or "").strip()
-    if not descrizione:
-        return jsonify({"error": "Descrivi prima l'operazione da registrare."}), 400
+    file_pdf = request.files.get("documento")
+    if file_pdf is not None and file_pdf.filename:
+        descrizione = (request.form.get("descrizione") or "").strip()
+    else:
+        payload = request.get_json(silent=True) or {}
+        descrizione = (payload.get("descrizione") or "").strip()
+        file_pdf = None
+
+    testo_documento = None
+    if file_pdf is not None:
+        if not file_pdf.filename.lower().endswith(".pdf"):
+            return jsonify({"error": "Per ora accetto solo file PDF."}), 400
+        try:
+            testo_documento, pagine_lette = estrai_testo_pdf(file_pdf.stream)
+        except AISuggestionError as e:
+            return jsonify({"error": str(e)}), 400
+        if not testo_documento:
+            return jsonify({"error": "Non sono riuscito a leggere testo da questo PDF — probabilmente è "
+                                      "una scansione/immagine senza testo selezionabile (serve OCR, non ancora "
+                                      "disponibile). Prova a descrivere l'operazione a mano qui sopra."}), 400
+
+    if not descrizione and not testo_documento:
+        return jsonify({"error": "Descrivi l'operazione oppure carica un documento PDF."}), 400
 
     accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
 
     try:
-        suggerimento = suggerisci_scrittura(descrizione, accounts)
+        suggerimento = suggerisci_scrittura(descrizione, accounts, testo_documento=testo_documento)
     except AISuggestionError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
