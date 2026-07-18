@@ -29,3 +29,8 @@ class Config:
     COMPANY_NAME = os.environ.get("COMPANY_NAME", "IRON SEGNALETICA")
 
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
+
+    # Chiave API OpenAI per il suggerimento AI delle scritture di Prima Nota
+    # (facoltativa: se assente, il pulsante "Suggerisci con AI" mostra un
+    # errore chiaro invece di rompere il resto dell'applicazione).
+    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
