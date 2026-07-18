@@ -8,6 +8,17 @@
       Il documento viene accettato solo se <strong>Dare = Avere</strong> — nessuna scrittura sbilanciata viene mai salvata.
     </div>
 
+    <div class="info-box" id="ai-box" style="background:#f4f0ff; border-color:#b39ddb;">
+      <strong>🤖 Suggerisci con AI</strong> — descrivi l'operazione in linguaggio naturale
+      (es. "pagata bolletta luce 180€ dal conto corrente"): l'AI propone le righe, ma
+      <strong>non registra nulla da sola</strong> — controlli e confermi tu premendo "Registra Documento".
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <input type="text" id="ai-descrizione" placeholder="Descrivi l'operazione..." style="flex:1;">
+        <button type="button" class="btn btn-ghost" id="ai-btn" onclick="suggerisciAI()">✨ Suggerisci</button>
+      </div>
+      <div id="ai-esito" style="margin-top:8px; font-size:13px;"></div>
+    </div>
+
     <form method="POST" id="journal_entry-form">
       <div class="form-grid">
         <div class="form-group">
@@ -96,5 +107,54 @@ function recalc() {
 
 // due righe iniziali di cortesia
 addLine(); addLine();
+
+async function suggerisciAI() {
+  const testo = document.getElementById('ai-descrizione').value.trim();
+  const esito = document.getElementById('ai-esito');
+  const btn = document.getElementById('ai-btn');
+  if (!testo) {
+    esito.innerHTML = '<span style="color:var(--ml-red);">Scrivi prima una descrizione.</span>';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = '⏳ Un attimo...';
+  esito.innerHTML = '';
+  try {
+    const resp = await fetch('/gl/ai/suggerisci', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ descrizione: testo })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ ${data.error || 'Errore sconosciuto.'}</span>`;
+      return;
+    }
+
+    // Svuota le righe attuali e ricrea quelle suggerite dall'AI
+    document.getElementById('lines-tbody').innerHTML = '';
+    data.lines.forEach(line => {
+      addLine();
+      const tr = document.getElementById('lines-tbody').lastElementChild;
+      tr.querySelector('.acct-sel').value = line.account_id;
+      tr.querySelector('.pk-sel').value = line.pk;
+      tr.querySelector('.amt-input').value = line.amount.toFixed(2);
+    });
+    recalc();
+
+    const descInput = document.querySelector('input[name="description"]');
+    if (descInput && !descInput.value) descInput.value = data.description;
+
+    let msg = '<span style="color:var(--ml-green);">✅ Righe proposte — controllale prima di registrare.</span>';
+    if (data.note) msg += `<br><em>Nota AI: ${data.note}</em>`;
+    if (data.avvisi && data.avvisi.length) msg += `<br><span style="color:#b8860b;">${data.avvisi.join('<br>')}</span>`;
+    esito.innerHTML = msg;
+  } catch (e) {
+    esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ Errore di rete: ${e}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✨ Suggerisci';
+  }
+}
 </script>
 {% endblock %}
