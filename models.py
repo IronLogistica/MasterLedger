@@ -382,3 +382,235 @@ class FiscalParameter(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     updated_by = db.relationship("User")
+
+
+# ══════════════════════════════════════════════════════════════
+# ANAGRAFICA ARTICOLI (Material Master — MM01 semplificato)
+# ══════════════════════════════════════════════════════════════
+class Material(db.Model):
+    """
+    Articolo con costo standard (per il Costo del Venduto all'uscita merci,
+    come SAP) e prezzo di vendita. La giacenza è tenuta qui a quantità;
+    il VALORE di magazzino vive nei conti G/L collegati al tipo articolo.
+    """
+    __tablename__ = "materials"
+
+    TYPE_ACCOUNTS = {"ROH": "150000", "HALB": "155000", "FERT": "160000"}
+    TYPE_LABELS = {"ROH": "Materia Prima", "HALB": "Semilavorato", "FERT": "Prodotto Finito"}
+
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(30), unique=True, nullable=False)
+    description = db.Column(db.String(200), nullable=False)
+    material_type = db.Column(db.String(5), nullable=False, default="FERT")  # ROH|HALB|FERT
+    uom = db.Column(db.String(10), default="PZ")
+    standard_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)   # costo del venduto
+    sales_price = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=22)
+    qty_on_hand = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    active = db.Column(db.Boolean, default=True)
+
+    @property
+    def type_label(self):
+        return self.TYPE_LABELS.get(self.material_type, self.material_type)
+
+    @property
+    def inventory_account_code(self):
+        return self.TYPE_ACCOUNTS.get(self.material_type, "160000")
+
+
+# ══════════════════════════════════════════════════════════════
+# CICLO ATTIVO SD — Preventivo → Ordine → DDT (PGI+COGS) → Fattura
+# ══════════════════════════════════════════════════════════════
+class Quotation(db.Model):
+    """Preventivo cliente (VA21)."""
+    __tablename__ = "quotations"
+    id = db.Column(db.Integer, primary_key=True)
+    doc_number = db.Column(db.String(20), unique=True, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=False)
+    status = db.Column(db.String(15), default="aperto")  # aperto | convertito | scaduto
+    note = db.Column(db.String(255))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    customer = db.relationship("Customer")
+    lines = db.relationship("QuotationLine", backref="quotation", cascade="all, delete-orphan")
+
+    @property
+    def total_net(self):
+        return sum(float(l.qty) * float(l.price) for l in self.lines)
+
+
+class QuotationLine(db.Model):
+    __tablename__ = "quotation_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    quotation_id = db.Column(db.Integer, db.ForeignKey("quotations.id"), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    price = db.Column(db.Numeric(14, 4), nullable=False)  # prezzo unitario netto
+    material = db.relationship("Material")
+
+
+class SalesOrder(db.Model):
+    """Ordine cliente (VA01) — creato libero o da Preventivo (copy control)."""
+    __tablename__ = "sales_orders"
+    id = db.Column(db.Integer, primary_key=True)
+    doc_number = db.Column(db.String(20), unique=True, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=False)
+    quotation_id = db.Column(db.Integer, db.ForeignKey("quotations.id"), nullable=True)
+    status = db.Column(db.String(15), default="aperto")  # aperto | consegnato
+    note = db.Column(db.String(255))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    customer = db.relationship("Customer")
+    quotation = db.relationship("Quotation", backref="orders")
+    lines = db.relationship("SalesOrderLine", backref="order", cascade="all, delete-orphan")
+
+    @property
+    def total_net(self):
+        return sum(float(l.qty) * float(l.price) for l in self.lines)
+
+    @property
+    def qty_delivered_total(self):
+        return sum(float(l.qty_delivered or 0) for l in self.lines)
+
+
+class SalesOrderLine(db.Model):
+    __tablename__ = "sales_order_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey("sales_orders.id"), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    qty_delivered = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    price = db.Column(db.Numeric(14, 4), nullable=False)
+    material = db.relationship("Material")
+
+
+class Delivery(db.Model):
+    """
+    DDT / Consegna (VL01N). Alla registrazione avviene l'USCITA MERCI (PGI):
+    scarico giacenza + scrittura Costo del Venduto:
+        Dare  Costo del Venduto (450000)
+        Avere Magazzino Prodotti Finiti (160000)
+    per qty × costo standard — esattamente come SAP (mov. 601).
+    """
+    __tablename__ = "deliveries"
+    id = db.Column(db.Integer, primary_key=True)
+    doc_number = db.Column(db.String(20), unique=True, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    order_id = db.Column(db.Integer, db.ForeignKey("sales_orders.id"), nullable=False)
+    customer_id = db.Column(db.Integer, db.ForeignKey("customers.id"), nullable=False)
+    cogs_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
+    billing_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    order = db.relationship("SalesOrder", backref="deliveries")
+    customer = db.relationship("Customer")
+    cogs_entry = db.relationship("JournalEntry", foreign_keys=[cogs_entry_id])
+    billing_entry = db.relationship("JournalEntry", foreign_keys=[billing_entry_id])
+    lines = db.relationship("DeliveryLine", backref="delivery", cascade="all, delete-orphan")
+
+    @property
+    def total_net(self):
+        return sum(float(l.qty) * float(l.price) for l in self.lines)
+
+    @property
+    def total_cogs(self):
+        return sum(float(l.qty) * float(l.unit_cost) for l in self.lines)
+
+    @property
+    def is_billed(self):
+        return self.billing_entry_id is not None
+
+
+class DeliveryLine(db.Model):
+    __tablename__ = "delivery_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    delivery_id = db.Column(db.Integer, db.ForeignKey("deliveries.id"), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    price = db.Column(db.Numeric(14, 4), nullable=False)      # prezzo di vendita (dall'ordine)
+    unit_cost = db.Column(db.Numeric(14, 4), nullable=False)  # costo standard AL MOMENTO del PGI
+    material = db.relationship("Material")
+
+
+# ══════════════════════════════════════════════════════════════
+# CICLO PASSIVO MM — Ordine Acquisto → Entrata Merci → Verifica Fattura
+# con THREE-WAY MATCH (Ordinato vs Ricevuto vs Fatturato)
+# ══════════════════════════════════════════════════════════════
+class PurchaseOrder(db.Model):
+    """Ordine d'acquisto (ME21N)."""
+    __tablename__ = "purchase_orders"
+    id = db.Column(db.Integer, primary_key=True)
+    doc_number = db.Column(db.String(20), unique=True, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    vendor_id = db.Column(db.Integer, db.ForeignKey("vendors.id"), nullable=False)
+    note = db.Column(db.String(255))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    vendor = db.relationship("Vendor")
+    lines = db.relationship("PurchaseOrderLine", backref="po", cascade="all, delete-orphan")
+
+    @property
+    def total_net(self):
+        return sum(float(l.qty) * float(l.price) for l in self.lines)
+
+    @property
+    def status(self):
+        recv = sum(float(l.qty_received or 0) for l in self.lines)
+        inv = sum(float(l.qty_invoiced or 0) for l in self.lines)
+        tot = sum(float(l.qty) for l in self.lines)
+        if inv >= tot and tot > 0:
+            return "fatturato"
+        if recv >= tot and tot > 0:
+            return "ricevuto"
+        if recv > 0:
+            return "parz. ricevuto"
+        return "aperto"
+
+
+class PurchaseOrderLine(db.Model):
+    __tablename__ = "purchase_order_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    po_id = db.Column(db.Integer, db.ForeignKey("purchase_orders.id"), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    price = db.Column(db.Numeric(14, 4), nullable=False)          # prezzo ordine (base del match)
+    qty_received = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    qty_invoiced = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    material = db.relationship("Material")
+
+
+class GoodsReceipt(db.Model):
+    """
+    Entrata merci (MIGO mov. 101). Scrittura, come SAP:
+        Dare  Magazzino (conto del tipo articolo)
+        Avere Ricevimenti da fatturare — EM/RF (165000)
+    al PREZZO ORDINE. Il conto EM/RF verrà chiuso dalla Verifica Fattura.
+    """
+    __tablename__ = "goods_receipts"
+    id = db.Column(db.Integer, primary_key=True)
+    doc_number = db.Column(db.String(20), unique=True, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    po_id = db.Column(db.Integer, db.ForeignKey("purchase_orders.id"), nullable=False)
+    ddt_vendor_ref = db.Column(db.String(60))  # n. DDT del fornitore
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    po = db.relationship("PurchaseOrder", backref="receipts")
+    journal_entry = db.relationship("JournalEntry")
+    lines = db.relationship("GoodsReceiptLine", backref="receipt", cascade="all, delete-orphan")
+
+
+class GoodsReceiptLine(db.Model):
+    __tablename__ = "goods_receipt_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    receipt_id = db.Column(db.Integer, db.ForeignKey("goods_receipts.id"), nullable=False)
+    po_line_id = db.Column(db.Integer, db.ForeignKey("purchase_order_lines.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    po_line = db.relationship("PurchaseOrderLine")

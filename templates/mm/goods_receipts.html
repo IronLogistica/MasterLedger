@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Entrata Merci{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📥 Entrata Merci su Ordine d'Acquisto <span class="tx-code">MIGO 101</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      L'entrata merci carica la giacenza e registra
+      <span class="mono">Dare Magazzino / Avere 165000 Ricevimenti da fatturare (EM/RF)</span>
+      al <strong>prezzo ordine</strong>. Il conto transitorio EM/RF verrà chiuso dalla Verifica Fattura —
+      questo è il perno del three-way match SAP.
+    </div>
+    <form method="POST">
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div class="form-group">
+          <label>Ordine d'acquisto <span class="req">*</span></label>
+          <select name="po_id" required>
+            <option value="">—</option>
+            {% for p in open_pos %}
+            <option value="{{ p.id }}">{{ p.doc_number }} — {{ p.vendor.name }} ({{ p.status }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>N. DDT del fornitore</label><input type="text" name="ddt_vendor_ref" placeholder="es. 458/2026"></div>
+      </div>
+      <div class="theory-note" style="margin-bottom:12px;">Lasciando vuote le quantità viene ricevuto <strong>tutto il residuo</strong> dell'ordine. Per ricevimenti parziali seleziona l'OA, guarda le righe in elenco sotto, e compila <span class="mono">recv_qty_&lt;id riga&gt;</span> — oppure registra più entrate successive.</div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Registra Entrata Merci</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Entrate Merci registrate</div>
+  <div class="card-body">
+    {% if receipts %}
+    <table class="masterledger-table">
+      <thead><tr><th>Numero</th><th>Data</th><th>OA</th><th>Fornitore</th><th>DDT fornitore</th><th>Scrittura</th></tr></thead>
+      <tbody>
+        {% for g in receipts %}
+        <tr>
+          <td class="mono fw-bold">{{ g.doc_number }}</td>
+          <td>{{ g.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td class="mono">{{ g.po.doc_number }}</td>
+          <td>{{ g.po.vendor.name }}</td>
+          <td>{{ g.ddt_vendor_ref or '—' }}</td>
+          <td>{% if g.journal_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=g.journal_entry_id) }}">{{ g.journal_entry.doc_number }}</a>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna entrata merci.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

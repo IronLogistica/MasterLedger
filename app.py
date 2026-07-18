@@ -44,6 +44,9 @@ def create_app(config_class=Config):
     from blueprints.assets.routes import assets_bp
     from blueprints.warehouse.routes import warehouse_bp
     from blueprints.costs.routes import costs_bp
+    from blueprints.sd.routes import sd_bp
+    from blueprints.mm.routes import mm_bp
+    from blueprints.materials.routes import materials_bp
 
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(dashboard_bp, url_prefix="/")
@@ -53,6 +56,9 @@ def create_app(config_class=Config):
     app.register_blueprint(assets_bp, url_prefix="/assets")
     app.register_blueprint(warehouse_bp, url_prefix="/warehouse")
     app.register_blueprint(costs_bp, url_prefix="/costs")
+    app.register_blueprint(sd_bp, url_prefix="/sd")
+    app.register_blueprint(mm_bp, url_prefix="/mm")
+    app.register_blueprint(materials_bp, url_prefix="/materials")
 
     # ── Variabili disponibili in ogni template ──────────────────
     @app.context_processor
@@ -76,6 +82,14 @@ def create_app(config_class=Config):
     with app.app_context():
         try:
             db.create_all()
+            from models import Account
+            for code, name, atype, co_rel, co_type in (
+                ("450000", "Costo del Venduto", "costo", True, "COST"),
+                ("165000", "Ricevimenti da fatturare (EM/RF)", "patrimoniale_passivo", False, None),
+            ):
+                if not Account.query.filter_by(code=code).first():
+                    db.session.add(Account(code=code, name=name, account_type=atype,
+                                           cost_relevant=co_rel, cost_relevant_type=co_type))
             for uname, pwd, role in (
                 ("Angelo", "Angelo1234", "operatore"),
                 ("Maurizio", "Maurizio1234", "commercialista"),

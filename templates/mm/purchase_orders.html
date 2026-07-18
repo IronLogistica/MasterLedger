@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "sd/_lines_form.html" import lines_form %}
+{% block title %}Ordini d'Acquisto{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📦 Nuovo Ordine d'Acquisto <span class="tx-code">ME21N</span></div>
+  <div class="card-body">
+    <form method="POST">
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div class="form-group">
+          <label>Fornitore <span class="req">*</span></label>
+          <select name="vendor_id" required>
+            <option value="">—</option>
+            {% for v in vendors %}<option value="{{ v.id }}">{{ v.code }} — {{ v.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Data</label><input type="date" name="doc_date"></div>
+      </div>
+      {{ lines_form(materials, 'standard_cost') }}
+      <div class="form-group" style="margin-top:12px;"><label>Note</label><input type="text" name="note"></div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Crea Ordine d'Acquisto</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Elenco Ordini d'Acquisto — con avanzamento del match</div>
+  <div class="card-body">
+    {% if pos %}
+    <table class="masterledger-table">
+      <thead><tr><th>Numero</th><th>Data</th><th>Fornitore</th><th class="td-num">Totale netto €</th><th class="td-num">Ordinato</th><th class="td-num">Ricevuto</th><th class="td-num">Fatturato</th><th>Stato</th></tr></thead>
+      <tbody>
+        {% for p in pos %}
+        <tr>
+          <td class="mono fw-bold">{{ p.doc_number }}</td>
+          <td>{{ p.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ p.vendor.name }}</td>
+          <td class="td-num">{{ '%.2f'|format(p.total_net) }}</td>
+          <td class="td-num">{{ '%.0f'|format(p.lines|sum(attribute='qty')) }}</td>
+          <td class="td-num">{{ '%.0f'|format(p.lines|sum(attribute='qty_received')) }}</td>
+          <td class="td-num">{{ '%.0f'|format(p.lines|sum(attribute='qty_invoiced')) }}</td>
+          <td>
+            {% if p.status == 'fatturato' %}<span class="status-badge status-paid">FATTURATO</span>
+            {% elif p.status == 'ricevuto' %}<span class="status-badge" style="background:rgba(30,111,165,.25);color:#9ecbff;">RICEVUTO</span>
+            {% elif p.status == 'parz. ricevuto' %}<span class="status-badge status-open">PARZ. RICEVUTO</span>
+            {% else %}<span class="status-badge status-open">APERTO</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun ordine d'acquisto.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

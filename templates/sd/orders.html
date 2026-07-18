@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% from "sd/_lines_form.html" import lines_form %}
+{% block title %}Ordini Cliente{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🧾 Nuovo Ordine Cliente (senza preventivo) <span class="tx-code">VA01</span></div>
+  <div class="card-body">
+    <div class="info-box">Gli ordini nati da un preventivo si creano dalla pagina <a href="{{ url_for('sd.quotations') }}">Preventivi</a> con "→ Crea Ordine" (copy control SAP). Qui crei un ordine diretto.</div>
+    <form method="POST">
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div class="form-group">
+          <label>Cliente <span class="req">*</span></label>
+          <select name="customer_id" required>
+            <option value="">—</option>
+            {% for c in customers %}<option value="{{ c.id }}">{{ c.code }} — {{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Note</label><input type="text" name="note"></div>
+      </div>
+      {{ lines_form(materials, 'sales_price') }}
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Crea Ordine</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Elenco Ordini Cliente</div>
+  <div class="card-body">
+    {% if orders %}
+    <table class="masterledger-table">
+      <thead><tr><th>Numero</th><th>Data</th><th>Cliente</th><th>Da preventivo</th><th class="td-num">Totale netto €</th><th class="td-num">Consegnato</th><th>Stato</th></tr></thead>
+      <tbody>
+        {% for o in orders %}
+        <tr>
+          <td class="mono fw-bold">{{ o.doc_number }}</td>
+          <td>{{ o.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ o.customer.name }}</td>
+          <td class="mono">{{ o.quotation.doc_number if o.quotation else '—' }}</td>
+          <td class="td-num">{{ '%.2f'|format(o.total_net) }}</td>
+          <td class="td-num">{{ '%.0f'|format(o.qty_delivered_total) }} pz</td>
+          <td>{% if o.status == 'consegnato' %}<span class="status-badge status-paid">CONSEGNATO</span>{% else %}<span class="status-badge status-open">APERTO</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun ordine cliente.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

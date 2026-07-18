@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Fatturazione DDT{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">💶 Fatturazione da DDT <span class="tx-code">VF01</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      La fattura nasce <strong>dal DDT</strong> (fatturazione differita): riprende righe, quantità e prezzi
+      della consegna e registra <span class="mono">Dare Crediti / Avere Ricavi + IVA a Debito</span>.
+      Il documento è un normale <strong>DR</strong>: lo ritrovi in Incassi clienti e puoi generare l'XML FatturaPA.
+    </div>
+    {% if to_bill %}
+    <table class="masterledger-table">
+      <thead><tr><th>DDT</th><th>Data</th><th>Cliente</th><th>Ordine</th><th class="td-num">Imponibile €</th><th></th></tr></thead>
+      <tbody>
+        {% for d in to_bill %}
+        <tr>
+          <td class="mono fw-bold">{{ d.doc_number }}</td>
+          <td>{{ d.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ d.customer.name }}</td>
+          <td class="mono">{{ d.order.doc_number }}</td>
+          <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
+          <td>
+            <form method="POST" style="display:inline;">
+              <input type="hidden" name="delivery_id" value="{{ d.id }}">
+              <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">→ Crea Fattura</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun DDT da fatturare — tutte le consegne sono già fatturate.</div>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">✅ DDT già fatturati (ultimi 30)</div>
+  <div class="card-body">
+    {% if billed %}
+    <table class="masterledger-table">
+      <thead><tr><th>DDT</th><th>Cliente</th><th>Fattura</th><th class="td-num">Totale lordo €</th></tr></thead>
+      <tbody>
+        {% for d in billed %}
+        <tr>
+          <td class="mono">{{ d.doc_number }}</td>
+          <td>{{ d.customer.name }}</td>
+          <td><a class="mono fw-bold" href="{{ url_for('gl.entry_detail', entry_id=d.billing_entry_id) }}">{{ d.billing_entry.doc_number }}</a></td>
+          <td class="td-num">{{ '%.2f'|format(d.billing_entry.gross_amount or 0) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Ancora nessuna fattura da DDT.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

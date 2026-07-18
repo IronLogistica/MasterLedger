@@ -1,0 +1,31 @@
+{# Macro riutilizzabile: righe articolo con prezzo proposto dall'anagrafica #}
+{% macro lines_form(materials, price_field) %}
+<table class="masterledger-table" id="lines-table">
+  <thead><tr><th>Articolo</th><th style="width:110px;">Quantità</th><th style="width:130px;">Prezzo unit. €</th></tr></thead>
+  <tbody>
+    {% for i in range(1, 6) %}
+    <tr>
+      <td>
+        <select name="material_id_{{ i }}" class="mat-select" data-row="{{ i }}" style="width:100%;padding:6px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;">
+          <option value="">—</option>
+          {% for m in materials %}
+          <option value="{{ m.id }}" data-price="{{ m[price_field] }}">{{ m.code }} — {{ m.description }} ({{ m.uom }})</option>
+          {% endfor %}
+        </select>
+      </td>
+      <td><input type="number" step="0.001" min="0" name="qty_{{ i }}" style="width:100%;padding:6px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
+      <td><input type="number" step="0.0001" min="0" name="price_{{ i }}" id="price_{{ i }}" style="width:100%;padding:6px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<script>
+document.querySelectorAll('.mat-select').forEach(function(sel){
+  sel.addEventListener('change', function(){
+    var opt = sel.options[sel.selectedIndex];
+    var p = opt.getAttribute('data-price');
+    if (p) document.getElementById('price_' + sel.dataset.row).value = p;
+  });
+});
+</script>
+{% endmacro %}

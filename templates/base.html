@@ -27,6 +27,21 @@
     <div class="sidebar-title">Contabilità Generale</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='gl.journal_entry' }}" href="{{ url_for('gl.journal_entry') }}">🧾 Prima nota</a>
 
+    <div class="sidebar-title">Vendite (SD) — dal Preventivo</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='sd.quotations' }}" href="{{ url_for('sd.quotations') }}">📝 Preventivi</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='sd.orders' }}" href="{{ url_for('sd.orders') }}">🧾 Ordini cliente</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='sd.deliveries' }}" href="{{ url_for('sd.deliveries') }}">🚚 DDT / Uscita merci</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='sd.billing' }}" href="{{ url_for('sd.billing') }}">💶 Fatturazione DDT</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='sd.margini' }}" href="{{ url_for('sd.margini') }}">📊 Margini (Costo del Venduto)</a>
+
+    <div class="sidebar-title">Acquisti (MM) — Three-Way Match</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.purchase_orders' }}" href="{{ url_for('mm.purchase_orders') }}">📦 Ordini d'acquisto</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.goods_receipts' }}" href="{{ url_for('mm.goods_receipts') }}">📥 Entrata merci</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.invoice_verification' }}" href="{{ url_for('mm.invoice_verification') }}">🔍 Verifica fattura <span class="badge">3-way</span></a>
+
+    <div class="sidebar-title">Anagrafiche</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='materials.material_list' }}" href="{{ url_for('materials.material_list') }}">🏷️ Articoli</a>
+
     <div class="sidebar-title">Ciclo Fornitore (AP)</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_invoice' }}" href="{{ url_for('ap.supplier_invoice') }}">📥 Fatture fornitore</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_invoice_import' }}" href="{{ url_for('ap.supplier_invoice_import') }}">📩 Import XML Fattura Ricevuta</a>

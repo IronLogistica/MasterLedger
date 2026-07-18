@@ -38,6 +38,8 @@ ACCOUNTS = [
     ("620000", "Costi di Manutenzione",                      "costo",                 True,  "COST"),
     ("640000", "Costi di Trasporto",                          "costo",                 True,  "COST"),
     ("4000",   "Ricavi di Vendita Prodotti",                 "ricavo",                True,  "REVENUE"),
+    ("450000", "Costo del Venduto",                           "costo",                 True,  "COST"),
+    ("165000", "Ricevimenti da fatturare (EM/RF)",            "patrimoniale_passivo",  False, None),
 ]
 
 
@@ -54,6 +56,7 @@ def run_seed():
     sequences = [
         ("SA", "10"), ("KR", "19"), ("DR", "14"), ("KZ", "15"),
         ("DZ", "16"), ("Cespiti", "20"), ("AF", "21"),
+        ("QT", "30"), ("OR", "31"), ("DL", "32"), ("OA", "33"), ("GR", "34"),
     ]
     for doc_type, prefix in sequences:
         if not DocumentSequence.query.filter_by(doc_type=doc_type).first():
@@ -133,6 +136,3 @@ def run_seed():
 
     db.session.commit()
 
-    print("\n── Utenti demo creati (CAMBIA LE PASSWORD prima di un uso reale) ──")
-    print("  Operatore:      username=operatore      password=operatore123")
-    print("  Commercialista: username=commercialista  password=commercialista123\n")

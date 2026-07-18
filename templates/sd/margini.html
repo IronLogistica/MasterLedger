@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Margini — Costo del Venduto{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📊 Margini per documento — Ricavi vs Costo del Venduto <span class="tx-code">CO-PA</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Conto economico <strong>a costo del venduto</strong> (come SAP): il costo nasce all'uscita merci,
+      il ricavo alla fattura — il margine è confrontabile documento per documento, senza aspettare le rimanenze di fine anno.
+    </div>
+    {% if rows %}
+    <table class="masterledger-table">
+      <thead><tr><th>DDT</th><th>Fattura</th><th>Cliente</th><th class="td-num">Ricavi netti €</th><th class="td-num">Costo del Venduto €</th><th class="td-num">Margine €</th><th class="td-num">Margine %</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="mono">{{ r.delivery.doc_number }}</td>
+          <td><a class="mono" href="{{ url_for('gl.entry_detail', entry_id=r.delivery.billing_entry_id) }}">{{ r.delivery.billing_entry.doc_number }}</a></td>
+          <td>{{ r.delivery.customer.name }}</td>
+          <td class="td-num">{{ '%.2f'|format(r.revenue) }}</td>
+          <td class="td-num color-red">{{ '%.2f'|format(r.cogs) }}</td>
+          <td class="td-num {{ 'color-green' if r.margin >= 0 else 'color-red' }} fw-bold">{{ '%.2f'|format(r.margin) }}</td>
+          <td class="td-num {{ 'color-green' if r.margin >= 0 else 'color-red' }}">{{ '%.1f'|format(r.margin_pct) }}%</td>
+        </tr>
+        {% endfor %}
+        <tr style="font-weight:700; background:var(--ml-surface2);">
+          <td colspan="3">TOTALE</td>
+          <td class="td-num">{{ '%.2f'|format(tot_rev) }}</td>
+          <td class="td-num color-red">{{ '%.2f'|format(tot_cogs) }}</td>
+          <td class="td-num {{ 'color-green' if tot_margin >= 0 else 'color-red' }}">{{ '%.2f'|format(tot_margin) }}</td>
+          <td class="td-num">{{ '%.1f'|format(tot_pct) }}%</td>
+        </tr>
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna fattura da DDT ancora registrata — i margini compaiono qui dopo la fatturazione.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

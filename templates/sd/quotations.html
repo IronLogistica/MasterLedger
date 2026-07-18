@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% from "sd/_lines_form.html" import lines_form %}
+{% block title %}Preventivi{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📝 Nuovo Preventivo Cliente <span class="tx-code">VA21</span></div>
+  <div class="card-body">
+    <form method="POST">
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div class="form-group">
+          <label>Cliente <span class="req">*</span></label>
+          <select name="customer_id" required>
+            <option value="">—</option>
+            {% for c in customers %}<option value="{{ c.id }}">{{ c.code }} — {{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Data</label><input type="date" name="doc_date"></div>
+      </div>
+      {{ lines_form(materials, 'sales_price') }}
+      <div class="form-group" style="margin-top:12px;"><label>Note</label><input type="text" name="note"></div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Crea Preventivo</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Elenco Preventivi</div>
+  <div class="card-body">
+    {% if quotations %}
+    <table class="masterledger-table">
+      <thead><tr><th>Numero</th><th>Data</th><th>Cliente</th><th class="td-num">Totale netto €</th><th>Stato</th><th></th></tr></thead>
+      <tbody>
+        {% for q in quotations %}
+        <tr>
+          <td class="mono fw-bold">{{ q.doc_number }}</td>
+          <td>{{ q.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ q.customer.name }}</td>
+          <td class="td-num">{{ '%.2f'|format(q.total_net) }}</td>
+          <td>{% if q.status == 'convertito' %}<span class="status-badge status-paid">CONVERTITO</span>{% else %}<span class="status-badge status-open">APERTO</span>{% endif %}</td>
+          <td>
+            {% if q.status == 'aperto' %}
+            <form method="POST" action="{{ url_for('sd.quotation_convert', quot_id=q.id) }}" style="display:inline;">
+              <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">→ Crea Ordine (VA01)</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun preventivo. Il ciclo SAP parte da qui.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Verifica Fattura — Three-Way Match{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🔍 Verifica Fattura Fornitore — THREE-WAY MATCH <span class="tx-code">MIRO</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Il <strong>three-way match</strong> confronta tre documenti prima di registrare il debito:
+      <strong>① Ordinato</strong> (prezzo e quantità dell'OA) · <strong>② Ricevuto</strong> (entrate merci) ·
+      <strong>③ Fatturato</strong> (la fattura del fornitore).<br>
+      Regole di blocco: quantità fatturata oltre il ricevuto → <span class="color-red fw-bold">⛔ BLOCCATA</span>;
+      prezzo fattura con scostamento oltre <strong>{{ tolerance }}%</strong> dal prezzo ordine → <span class="color-red fw-bold">⛔ BLOCCATA</span>.
+      Se il match passa: <span class="mono">Dare EM/RF + IVA a Credito / Avere Debiti v/Fornitori</span>.
+    </div>
+
+    {% if pos %}
+    {% for p in pos %}
+    <div class="card" style="margin-bottom:14px;">
+      <div class="card-header" style="font-size:13.5px;">{{ p.doc_number }} — {{ p.vendor.name }} <span class="tx-code">{{ p.status|upper }}</span></div>
+      <div class="card-body">
+        <form method="POST">
+          <input type="hidden" name="po_id" value="{{ p.id }}">
+          <table class="masterledger-table" style="margin-bottom:12px;">
+            <thead><tr><th>Articolo</th><th class="td-num">① Ordinato</th><th class="td-num">Prezzo ordine €</th><th class="td-num">② Ricevuto</th><th class="td-num">già Fatturato</th><th style="width:110px;">③ Q.tà fattura</th><th style="width:120px;">③ Prezzo fattura €</th></tr></thead>
+            <tbody>
+              {% for l in p.lines %}
+              <tr>
+                <td>{{ l.material.code }} — {{ l.material.description }}</td>
+                <td class="td-num">{{ '%.0f'|format(l.qty) }}</td>
+                <td class="td-num">{{ '%.4f'|format(l.price) }}</td>
+                <td class="td-num {{ 'color-green' if l.qty_received >= l.qty else '' }}">{{ '%.0f'|format(l.qty_received) }}</td>
+                <td class="td-num">{{ '%.0f'|format(l.qty_invoiced) }}</td>
+                <td><input type="number" step="0.001" min="0" name="inv_qty_{{ l.id }}" value="{{ '%.0f'|format(l.qty_received - l.qty_invoiced) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
+                <td><input type="number" step="0.0001" min="0" name="inv_price_{{ l.id }}" value="{{ '%.4f'|format(l.price) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="form-grid" style="margin-bottom:10px;">
+            <div class="form-group"><label>Riferimento fattura fornitore</label><input type="text" name="invoice_ref" placeholder="es. FT 2026/00123"></div>
+            <div class="form-group"><label>Aliquota IVA %</label><input type="number" step="0.01" name="vat_rate" value="22"></div>
+          </div>
+          <button class="btn btn-success" type="submit">Esegui Three-Way Match e Registra</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}<div class="empty-state">Nessun ordine con merce ricevuta in attesa di fattura.<br>Il match richiede prima un'<a href="{{ url_for('mm.goods_receipts') }}">Entrata Merci</a>.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

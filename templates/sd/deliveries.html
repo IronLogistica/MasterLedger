@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}DDT / Uscita Merci{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🚚 Nuovo DDT — Uscita Merci <span class="tx-code">VL01N + 601</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Alla registrazione del DDT avviene l'<strong>Uscita Merci (PGI)</strong>: la giacenza viene
+      scaricata e nasce la scrittura del <strong>Costo del Venduto</strong> al costo standard —
+      <span class="mono">Dare 450000 Costo del Venduto / Avere Magazzino</span> — come il movimento 601 di SAP.
+    </div>
+    <form method="POST">
+      <div class="form-group" style="max-width:520px;">
+        <label>Ordine cliente da consegnare <span class="req">*</span></label>
+        <select name="order_id" required>
+          <option value="">—</option>
+          {% for o in open_orders %}
+          <option value="{{ o.id }}">{{ o.doc_number }} — {{ o.customer.name }} ({{ '%.2f'|format(o.total_net) }} € netto)</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Registra DDT + Uscita Merci</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Elenco DDT</div>
+  <div class="card-body">
+    {% if deliveries %}
+    <table class="masterledger-table">
+      <thead><tr><th>DDT</th><th>Data</th><th>Cliente</th><th>Ordine</th><th class="td-num">Valore vendita €</th><th class="td-num">Costo del Venduto €</th><th>Scrittura COGS</th><th>Fattura</th></tr></thead>
+      <tbody>
+        {% for d in deliveries %}
+        <tr>
+          <td class="mono fw-bold">{{ d.doc_number }}</td>
+          <td>{{ d.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ d.customer.name }}</td>
+          <td class="mono">{{ d.order.doc_number }}</td>
+          <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
+          <td class="td-num color-red">{{ '%.2f'|format(d.total_cogs) }}</td>
+          <td>{% if d.cogs_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=d.cogs_entry_id) }}">{{ d.cogs_entry.doc_number }}</a>{% else %}—{% endif %}</td>
+          <td>{% if d.is_billed %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=d.billing_entry_id) }}"><span class="status-badge status-paid">{{ d.billing_entry.doc_number }}</span></a>{% else %}<span class="status-badge status-open">DA FATTURARE</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun DDT registrato.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
