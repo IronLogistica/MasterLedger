@@ -618,3 +618,46 @@ class GoodsReceiptLine(db.Model):
     po_line_id = db.Column(db.Integer, db.ForeignKey("purchase_order_lines.id"), nullable=False)
     qty = db.Column(db.Numeric(14, 3), nullable=False)
     po_line = db.relationship("PurchaseOrderLine")
+
+
+# ══════════════════════════════════════════════════════════════
+# PRODUZIONE COMPLETATA (COGM) — soluzione PONTE finché non c'è
+# MasterProduction. Registrazione periodica (tipicamente mensile) del
+# Costo del Prodotto Finito (Cost of Goods Manufactured), a costo standard:
+#
+#   Dare  Magazzino Prodotti Finiti (160000)     = materie prime + manodopera + costi indiretti
+#     Avere  Magazzino Materie Prime (150000)    = materie prime consumate (movimento di magazzino reale)
+#     Avere  Variazione Rimanenze PF (430000)    = manodopera diretta + costi indiretti capitalizzati
+#                                                  (la manodopera è già stata spesata a conto economico
+#                                                   altrove — es. dalle buste paga — qui si "recupera"
+#                                                   la quota che è finita a valore di magazzino, non persa)
+#
+# Quando MasterProduction sarà pronto, questa tabella diventa il punto in
+# cui i dati arrivano in automatico invece che inseriti a mano — la
+# struttura contabile sotto non cambia.
+# ══════════════════════════════════════════════════════════════
+class ProductionEntry(db.Model):
+    __tablename__ = "production_entries"
+    id = db.Column(db.Integer, primary_key=True)
+    doc_number = db.Column(db.String(20), unique=True, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    period_label = db.Column(db.String(30))  # es. "Luglio 2026" — solo descrittivo
+
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty_produced = db.Column(db.Numeric(14, 3), nullable=False)
+
+    raw_material_cost = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    direct_labor_cost = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    overhead_cost = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    notes = db.Column(db.String(300))
+
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    material = db.relationship("Material")
+    journal_entry = db.relationship("JournalEntry")
+
+    @property
+    def total_cogm(self):
+        return (self.raw_material_cost or 0) + (self.direct_labor_cost or 0) + (self.overhead_cost or 0)
