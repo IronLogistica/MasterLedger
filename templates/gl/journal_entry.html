@@ -14,6 +14,11 @@
       <strong>non registra nulla da sola</strong> — controlli e confermi tu premendo "Registra Documento".
       <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
         <input type="text" id="ai-descrizione" placeholder="Descrivi l'operazione (facoltativo se carichi un PDF)..." style="flex:1; min-width:220px;">
+        <select id="ai-tipo-documento">
+          <option value="">Documento generico</option>
+          <option value="busta_paga">Busta paga</option>
+          <option value="f24">F24</option>
+        </select>
         <input type="file" id="ai-pdf" accept="application/pdf">
         <button type="button" class="btn btn-ghost" id="ai-btn" onclick="suggerisciAI()">✨ Suggerisci</button>
       </div>
@@ -113,6 +118,7 @@ async function suggerisciAI() {
   const testo = document.getElementById('ai-descrizione').value.trim();
   const fileInput = document.getElementById('ai-pdf');
   const file = fileInput.files[0];
+  const tipoDocumento = document.getElementById('ai-tipo-documento').value;
   const esito = document.getElementById('ai-esito');
   const btn = document.getElementById('ai-btn');
 
@@ -129,13 +135,14 @@ async function suggerisciAI() {
     if (file) {
       const formData = new FormData();
       formData.append('descrizione', testo);
+      formData.append('tipo_documento', tipoDocumento);
       formData.append('documento', file);
       resp = await fetch('/gl/ai/suggerisci', { method: 'POST', body: formData });
     } else {
       resp = await fetch('/gl/ai/suggerisci', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ descrizione: testo })
+        body: JSON.stringify({ descrizione: testo, tipo_documento: tipoDocumento })
       });
     }
     const data = await resp.json();
