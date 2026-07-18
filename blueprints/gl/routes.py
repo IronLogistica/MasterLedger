@@ -1,10 +1,11 @@
 from datetime import datetime
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
 from flask_login import login_required, current_user
 
 from extensions import db
 from models import Account, CostCenter, JournalEntry
 from services.posting import post_journal_entry, reverse_journal_entry, UnbalancedEntryError
+from services.ai_posting import suggerisci_scrittura, AISuggestionError
 
 gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
 
@@ -84,3 +85,60 @@ def journal_entry():
             flash(str(e), "danger")
 
     return render_template("gl/journal_entry.html", accounts=accounts, cost_centers=cost_centers)
+
+
+@gl_bp.route("/ai/suggerisci", methods=["POST"])
+@login_required
+def ai_suggerisci():
+    """
+    Suggerimento AI per la Prima Nota: prende una descrizione in linguaggio
+    naturale e propone le righe (conto, Dare/Avere, importo) da mostrare
+    PRE-COMPILATE nel form — l'utente le controlla e conferma lui stesso con
+    "Registra Documento". Questa rotta non scrive MAI su JournalEntry: non
+    passa da post_journal_entry, si limita a restituire un suggerimento.
+    """
+    payload = request.get_json(silent=True) or {}
+    descrizione = (payload.get("descrizione") or "").strip()
+    if not descrizione:
+        return jsonify({"error": "Descrivi prima l'operazione da registrare."}), 400
+
+    accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
+
+    try:
+        suggerimento = suggerisci_scrittura(descrizione, accounts)
+    except AISuggestionError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Errore imprevisto: {e}"}), 500
+
+    # L'AI conosce solo i CODICI conto (non gli id del database) — li risolviamo qui.
+    code_to_id = {a.code: a.id for a in accounts}
+    righe_risolte = []
+    avvisi = []
+    for line in suggerimento.get("lines", []):
+        code = str(line.get("account_code", "")).strip()
+        acc_id = code_to_id.get(code)
+        if not acc_id:
+            avvisi.append(f'Conto "{code}" proposto dall\'AI non esiste nel piano dei conti: riga saltata.')
+            continue
+        try:
+            amount = float(line.get("amount") or 0)
+        except (TypeError, ValueError):
+            avvisi.append(f'Importo non valido per il conto "{code}": riga saltata.')
+            continue
+        righe_risolte.append({
+            "account_id": acc_id,
+            "pk": "40" if str(line.get("pk")) == "40" else "50",
+            "amount": amount,
+        })
+
+    if len(righe_risolte) < 2:
+        return jsonify({"error": "Dopo aver verificato i conti proposti, non restano abbastanza righe valide. "
+                                  "Prova a riformulare la richiesta.", "avvisi": avvisi}), 400
+
+    return jsonify({
+        "description": suggerimento.get("description") or descrizione,
+        "lines": righe_risolte,
+        "note": suggerimento.get("note"),
+        "avvisi": avvisi,
+    })
