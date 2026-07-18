@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 gunicorn==22.0.0
 Werkzeug==3.0.3
 openai==1.54.4
+pypdf==5.1.0
