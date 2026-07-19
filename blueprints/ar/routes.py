@@ -348,6 +348,23 @@ def invoice_xml(entry_id):
     )
 
 
+@ar_bp.route("/customer_invoice/<int:entry_id>/cortesia")
+@ar_bp.route("/documento/<int:entry_id>/cortesia")
+@login_required
+def invoice_cortesia(entry_id):
+    """
+    Fattura di Cortesia — documento stampabile NON FISCALE, da mandare al
+    cliente per comodità/anticipazione (es. prima o al posto della vera
+    fattura elettronica via SdI). Rilegge i dati della fattura già registrata
+    (JournalEntry + InvoiceLine), non genera nessun nuovo documento fiscale e
+    non ha nessun valore ai fini IVA — va sempre etichettata chiaramente come
+    tale per non essere confusa con la Fattura Elettronica vera.
+    """
+    entry = JournalEntry.query.get_or_404(entry_id)
+    righe = InvoiceLine.query.filter_by(entry_id=entry.id).order_by(InvoiceLine.line_number).all()
+    return render_template("ar/invoice_cortesia.html", entry=entry, righe=righe)
+
+
 @ar_bp.route("/customers/<int:customer_id>/dati-fiscali", methods=["GET", "POST"])
 @login_required
 def customer_fiscali(customer_id):
