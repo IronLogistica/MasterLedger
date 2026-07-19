@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Conferma d'Ordine {{ o.doc_number }}</title>
+<style>
+  body{font-family:'Georgia',serif;color:#1a1a1a;max-width:800px;margin:30px auto;padding:0 20px;}
+  .toolbar{text-align:right;margin-bottom:16px;}
+  .toolbar button{padding:8px 16px;border-radius:6px;border:1px solid #999;background:#f5f5f5;cursor:pointer;font-size:13px;}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1a1a1a;padding-bottom:14px;margin-bottom:24px;}
+  .header h1{font-size:22px;margin:0;}
+  .doc-title{text-align:right;}
+  .doc-title h2{margin:0;font-size:20px;}
+  .doc-title .num{font-family:monospace;font-size:15px;color:#444;}
+  .parties{display:flex;justify-content:space-between;margin-bottom:24px;}
+  .party{width:47%;}
+  .party .label{font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#777;margin-bottom:4px;}
+  table{width:100%;border-collapse:collapse;margin-bottom:20px;}
+  th{background:#f0f0f0;text-align:left;padding:8px 10px;font-size:12px;text-transform:uppercase;border-bottom:2px solid #1a1a1a;}
+  td{padding:8px 10px;border-bottom:1px solid #ddd;font-size:14px;}
+  .num{text-align:right;font-family:monospace;}
+  .totale-row td{font-weight:bold;font-size:16px;border-top:2px solid #1a1a1a;border-bottom:none;}
+  .note{margin-top:20px;padding:12px 16px;background:#f9f9f9;border-left:3px solid #999;font-size:13px;}
+  .footer{margin-top:40px;font-size:12px;color:#777;text-align:center;}
+  @media print{ .toolbar{display:none;} body{margin:0;} }
+</style>
+</head>
+<body>
+
+<div class="toolbar"><button onclick="window.print()">🖨️ Stampa / Salva PDF</button></div>
+
+<div class="header">
+  <div><h1>{{ company_name }}</h1></div>
+  <div class="doc-title">
+    <h2>Conferma d'Ordine</h2>
+    <div class="num">{{ o.doc_number }} — {{ o.doc_date.strftime('%d/%m/%Y') }}</div>
+  </div>
+</div>
+
+<div class="parties">
+  <div class="party">
+    <div class="label">Spettabile</div>
+    <strong>{{ o.party.name if o.party else '—' }}</strong><br>
+    {% if o.party %}
+      {{ o.party.indirizzo or '' }}<br>
+      {{ o.party.cap or '' }} {{ o.party.comune or '' }} {{ '(' + o.party.provincia + ')' if o.party.provincia else '' }}<br>
+      {% if o.party.piva %}P.IVA {{ o.party.piva }}{% endif %}
+    {% endif %}
+  </div>
+  <div class="party" style="text-align:right;">
+    <div class="label">Riferimento ordine</div>
+    Numero: <strong>{{ o.doc_number }}</strong><br>
+    Data: {{ o.doc_date.strftime('%d/%m/%Y') }}<br>
+    {% if o.quotation %}Da preventivo: {{ o.quotation.doc_number }}<br>{% endif %}
+    Condizioni di pagamento: {{ o.party.payment_terms if o.party else '—' }}
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>Codice</th><th>Descrizione</th><th class="num">Quantità</th><th class="num">Prezzo unit. €</th><th class="num">Totale €</th></tr></thead>
+  <tbody>
+    {% for l in o.lines %}
+    <tr>
+      <td>{{ l.material.code }}</td>
+      <td>{{ l.material.description }}</td>
+      <td class="num">{{ '%.0f'|format(l.qty) }}</td>
+      <td class="num">{{ '%.2f'|format(l.price) }}</td>
+      <td class="num">{{ '%.2f'|format(l.qty * l.price) }}</td>
+    </tr>
+    {% endfor %}
+    <tr class="totale-row">
+      <td colspan="4">Totale netto ordine</td>
+      <td class="num">€ {{ '%.2f'|format(o.total_net) }}</td>
+    </tr>
+  </tbody>
+</table>
+
+{% if o.note %}
+<div class="note"><strong>Note:</strong> {{ o.note }}</div>
+{% endif %}
+
+<div class="footer">
+  Questo documento conferma i termini dell'ordine concordato. Non ha valore di fattura.<br>
+  {{ company_name }}
+</div>
+
+</body>
+</html>

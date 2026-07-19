@@ -28,7 +28,7 @@
   <div class="card-body">
     {% if orders %}
     <table class="masterledger-table">
-      <thead><tr><th>Numero</th><th>Data</th><th>Cliente</th><th>Da preventivo</th><th class="td-num">Totale netto €</th><th class="td-num">Consegnato</th><th>Stato</th></tr></thead>
+      <thead><tr><th>Numero</th><th>Data</th><th>Cliente</th><th>Da preventivo</th><th class="td-num">Totale netto €</th><th class="td-num">Consegnato</th><th>Stato</th><th></th></tr></thead>
       <tbody>
         {% for o in orders %}
         <tr>
@@ -39,6 +39,7 @@
           <td class="td-num">{{ '%.2f'|format(o.total_net) }}</td>
           <td class="td-num">{{ '%.0f'|format(o.qty_delivered_total) }} pz</td>
           <td>{% if o.status == 'consegnato' %}<span class="status-badge status-paid">CONSEGNATO</span>{% else %}<span class="status-badge status-open">APERTO</span>{% endif %}</td>
+          <td><a class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px;" href="{{ url_for('sd.order_confirmation', order_id=o.id) }}" target="_blank">📄 Conferma</a></td>
         </tr>
         {% endfor %}
       </tbody>
