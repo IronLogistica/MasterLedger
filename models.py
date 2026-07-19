@@ -412,6 +412,14 @@ class Material(db.Model):
     vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=22)
     qty_on_hand = db.Column(db.Numeric(14, 3), nullable=False, default=0)
     active = db.Column(db.Boolean, default=True)
+    # Flag: questo articolo passa dal reparto carpenteria propria (taglio e
+    # foratura di semilavorati, poi saldatura) — es. paletti parapedonali,
+    # transenne, archetti parcheggi, cavalletti cartelli stradali, cartelli
+    # stradali assemblati (pellicola su lamiera ferrosa acquistata). Serve per
+    # sapere QUALI prodotti condividono il pool di costi indiretti di
+    # carpenteria (taglio/foratura) quando lo si spalma in base al fatturato —
+    # un prodotto comprato e rivenduto così com'è NON deve riceverne quota.
+    is_carpenteria_propria = db.Column(db.Boolean, default=False, nullable=False)
 
     @property
     def type_label(self):
@@ -661,3 +669,41 @@ class ProductionEntry(db.Model):
     @property
     def total_cogm(self):
         return (self.raw_material_cost or 0) + (self.direct_labor_cost or 0) + (self.overhead_cost or 0)
+
+
+class ProductionOverheadItem(db.Model):
+    """
+    Voce singola del pool di costi indiretti di REPARTO (Livello 1: taglio,
+    foratura, assemblaggio, confezionamento) per un dato mese — es.
+    "Ammortamento macchina taglio: 300€". Inserite a mano da Mauri, voce per
+    voce, UNA VOLTA AL MESE (non per singolo prodotto): la somma di queste
+    voci è il pool condiviso da cui ogni prodotto di carpenteria propria
+    riceve la propria quota, in proporzione al fatturato, quando si registra
+    una Produzione Completata (vedi _calcola_overhead_da_fatturato).
+    """
+    __tablename__ = "production_overhead_items"
+    id = db.Column(db.Integer, primary_key=True)
+    year = db.Column(db.Integer, nullable=False)
+    month = db.Column(db.Integer, nullable=False)   # 1-12
+    description = db.Column(db.String(200), nullable=False)
+    amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class OverheadAdjustment(db.Model):
+    """
+    Correzione manuale (rateo o risconto) al calcolo AUTOMATICO dell'overhead
+    generale aziendale (Livello 2 — vedi _calcola_overhead_generale). Un
+    rateo/risconto tipico: un costo di competenza del mese non ancora
+    fatturato/registrato (rateo, amount positivo) o un costo già registrato
+    ma di competenza di mesi futuri (risconto, amount negativo).
+    """
+    __tablename__ = "overhead_adjustments"
+    id = db.Column(db.Integer, primary_key=True)
+    year = db.Column(db.Integer, nullable=False)
+    month = db.Column(db.Integer, nullable=False)   # 1-12
+    description = db.Column(db.String(200), nullable=False)
+    amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)  # + aumenta l'overhead, - lo riduce
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

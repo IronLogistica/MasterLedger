@@ -34,3 +34,9 @@ class Config:
     # (facoltativa: se assente, il pulsante "Suggerisci con AI" mostra un
     # errore chiaro invece di rompere il resto dell'applicazione).
     OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+    # URL base del servizio MasterLogistic-WMS (fonte di verità per le giacenze).
+    # Es. https://masterlogistic-wms-production.up.railway.app — SENZA slash finale.
+    # Se assente, tutte le operazioni che leggono/scrivono giacenza restano bloccate
+    # con un errore chiaro invece di proseguire silenziosamente con dati sbagliati.
+    MASTERLOGISTIC_URL = os.environ.get("MASTERLOGISTIC_URL", "").rstrip("/")
