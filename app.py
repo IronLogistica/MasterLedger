@@ -82,10 +82,19 @@ def create_app(config_class=Config):
         run_seed()
         print("Database popolato con dati di partenza.")
 
-    # ── Bootstrap automatico (Railway): crea tabelle + utenti garantiti ──
+    # ── Bootstrap automatico (Railway): SOLO conti/utenti garantiti ──
+    # FIX (19/07/2026): qui c'era anche un db.create_all() automatico ad ogni
+    # avvio. Il problema: create_all() crea le tabelle NUOVE che mancano, ma
+    # non tocca MAI le tabelle già esistenti per aggiungere colonne — quindi
+    # ogni volta che una migrazione aggiungeva un campo a una tabella già
+    # esistente (es. materials.is_carpenteria_propria), create_all() la
+    # "nascondeva" creando nel frattempo le tabelle nuove senza che
+    # alembic_version avanzasse mai, lasciando lo schema in uno stato
+    # incoerente e imprevedibile. Da ora lo schema lo gestisce SOLO
+    # `flask db upgrade` (già eseguito automaticamente da Railway nel passo
+    # "release" del Procfile) — niente più scorciatoie qui.
     with app.app_context():
         try:
-            db.create_all()
             from models import Account
             for code, name, atype, co_rel, co_type in (
                 ("450000", "Costo del Venduto", "costo", True, "COST"),
