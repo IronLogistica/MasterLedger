@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Fattura di Cortesia {{ entry.doc_number }}</title>
+<style>
+  body{font-family:'Georgia',serif;color:#1a1a1a;max-width:800px;margin:30px auto;padding:0 20px;}
+  .toolbar{text-align:right;margin-bottom:16px;}
+  .toolbar button{padding:8px 16px;border-radius:6px;border:1px solid #999;background:#f5f5f5;cursor:pointer;font-size:13px;}
+  .banner-non-fiscale{background:#fff3cd;border:2px solid #d97706;color:#7c4a03;padding:10px 16px;text-align:center;font-weight:bold;font-size:13px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:20px;border-radius:6px;}
+  .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #1a1a1a;padding-bottom:14px;margin-bottom:24px;}
+  .header h1{font-size:22px;margin:0;}
+  .doc-title{text-align:right;}
+  .doc-title h2{margin:0;font-size:20px;}
+  .doc-title .num{font-family:monospace;font-size:15px;color:#444;}
+  .parties{display:flex;justify-content:space-between;margin-bottom:24px;}
+  .party{width:47%;}
+  .party .label{font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:#777;margin-bottom:4px;}
+  table{width:100%;border-collapse:collapse;margin-bottom:20px;}
+  th{background:#f0f0f0;text-align:left;padding:8px 10px;font-size:12px;text-transform:uppercase;border-bottom:2px solid #1a1a1a;}
+  td{padding:8px 10px;border-bottom:1px solid #ddd;font-size:14px;}
+  .num{text-align:right;font-family:monospace;}
+  .totali{width:280px;margin-left:auto;}
+  .totali td{border-bottom:none;padding:4px 10px;}
+  .totali .riga-finale td{font-weight:bold;font-size:16px;border-top:2px solid #1a1a1a;}
+  .footer{margin-top:40px;font-size:12px;color:#777;text-align:center;}
+  @media print{ .toolbar{display:none;} body{margin:0;} }
+</style>
+</head>
+<body>
+
+<div class="toolbar"><button onclick="window.print()">🖨️ Stampa / Salva PDF</button></div>
+
+<div class="banner-non-fiscale">⚠️ Documento non fiscale — Fattura di Cortesia — non sostituisce la Fattura Elettronica</div>
+
+<div class="header">
+  <div><h1>{{ company_name }}</h1></div>
+  <div class="doc-title">
+    <h2>Fattura di Cortesia</h2>
+    <div class="num">Rif. {{ entry.doc_number }} — {{ entry.doc_date.strftime('%d/%m/%Y') }}</div>
+  </div>
+</div>
+
+<div class="parties">
+  <div class="party">
+    <div class="label">Spettabile</div>
+    {% if entry.party %}
+      <strong>{{ entry.party.name }}</strong><br>
+      {{ entry.party.indirizzo or '' }}<br>
+      {{ entry.party.cap or '' }} {{ entry.party.comune or '' }} {{ '(' + entry.party.provincia + ')' if entry.party.provincia else '' }}<br>
+      {% if entry.party.piva %}P.IVA {{ entry.party.piva }}{% endif %}
+    {% else %}—{% endif %}
+  </div>
+  <div class="party" style="text-align:right;">
+    <div class="label">Riferimento</div>
+    {{ entry.description or '' }}
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>Descrizione</th><th class="num">Imponibile €</th><th class="num">IVA %</th></tr></thead>
+  <tbody>
+    {% for r in righe %}
+    <tr>
+      <td>{{ r.description }}</td>
+      <td class="num">{{ '%.2f'|format(r.amount) }}</td>
+      <td class="num">{{ '%.0f'|format(r.vat_rate) }}%</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<table class="totali">
+  <tr class="riga-finale"><td>Totale documento</td><td class="num">€ {{ '%.2f'|format(entry.gross_amount) if entry.gross_amount is not none else '—' }}</td></tr>
+</table>
+
+<div class="footer">
+  Questo documento è emesso a puro titolo informativo/di cortesia e non ha valore fiscale.
+  La Fattura Elettronica, unico documento valido ai fini di legge, viene trasmessa separatamente tramite il Sistema di Interscambio (SdI).<br>
+  {{ company_name }}
+</div>
+
+</body>
+</html>
