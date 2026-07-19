@@ -42,6 +42,9 @@ ACCOUNTS = [
     ("165000", "Ricevimenti da fatturare (EM/RF)",            "patrimoniale_passivo",  False, None),
     ("430000", "Variazione Rimanenze Prodotti Finiti",         "ricavo",                True,  "REVENUE"),
     ("460000", "Varianza Prezzo Materiali",                    "costo",                 True,  "COST"),
+    ("461000", "Varianza Materiali (Produzione)",               "costo",                 True,  "COST"),
+    ("462000", "Varianza Manodopera (Produzione)",              "costo",                 True,  "COST"),
+    ("463000", "Varianza Overhead (Produzione)",                "costo",                 True,  "COST"),
 ]
 
 
