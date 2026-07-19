@@ -29,7 +29,7 @@ from flask_login import login_required, current_user
 
 from extensions import db
 from models import (Account, Material, ProductionEntry, DocumentSequence, Delivery, DeliveryLine,
-                     ProductionOverheadItem, OverheadAdjustment, JournalEntry, JournalLine)
+                     ProductionOverheadItem, OverheadAdjustment, JournalEntry, JournalLine, StandardCost)
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.logistic_client import get_bom, sposta_stock, LogisticError
 
@@ -275,6 +275,75 @@ def calcola_overhead():
         return jsonify({"error": avviso, "dettaglio": dettaglio, "pool_totale": float(pool_totale)}), 400
 
     return jsonify({"quota": float(quota), "dettaglio": dettaglio, "pool_totale": float(pool_totale), "avviso": avviso})
+
+
+def _trova_standard_applicabile(material_id, anno, mese):
+    """
+    Trova il Costo Standard applicabile per un materiale in un dato anno/mese:
+    l'ultimo standard fissato con (year, month) <= (anno, mese) — cioè
+    "valido da quel mese in poi, finché non arriva uno standard più recente".
+    Ritorna None se non esiste nessuno standard applicabile (in quel caso si
+    capitalizza al consuntivo come sempre, senza varianze).
+    """
+    candidati = (StandardCost.query
+                 .filter_by(material_id=material_id)
+                 .filter(db.or_(StandardCost.year < anno,
+                                db.and_(StandardCost.year == anno, StandardCost.month <= mese)))
+                 .order_by(StandardCost.year.desc(), StandardCost.month.desc())
+                 .first())
+    return candidati
+
+
+@production_bp.route("/costo-standard", methods=["GET", "POST"])
+@login_required
+def costo_standard():
+    """
+    Gestione del Costo Standard di ogni prodotto finito — FISSATO IN ANTICIPO
+    (es. a inizio mese/anno), il prerequisito per calcolare le varianze di
+    produzione (materiali, manodopera, overhead) alla SAP. Una volta fissato
+    per un materiale/periodo, resta valido finché non ne inserisci uno più
+    recente per lo stesso materiale.
+    """
+    materiali_finiti = Material.query.filter_by(active=True).order_by(Material.code).all()
+
+    if request.method == "POST":
+        try:
+            material_id = request.form.get("material_id", type=int)
+            anno = request.form.get("year", type=int)
+            mese = request.form.get("month", type=int)
+            mat_cost = Decimal(str(request.form.get("standard_material_cost", "0")).replace(",", "."))
+            lab_cost = Decimal(str(request.form.get("standard_labor_cost", "0")).replace(",", "."))
+            oh_cost = Decimal(str(request.form.get("standard_overhead_cost", "0")).replace(",", "."))
+        except Exception:
+            flash("Controlla i valori inseriti.", "danger")
+            return redirect(url_for("production.costo_standard"))
+
+        if not material_id or not anno or not mese:
+            flash("Prodotto, anno e mese sono obbligatori.", "danger")
+            return redirect(url_for("production.costo_standard"))
+
+        db.session.add(StandardCost(
+            material_id=material_id, year=anno, month=mese,
+            standard_material_cost=mat_cost, standard_labor_cost=lab_cost, standard_overhead_cost=oh_cost,
+            notes=request.form.get("notes", "").strip(), created_by_id=current_user.id,
+        ))
+        db.session.commit()
+        flash("Costo Standard salvato.", "success")
+        return redirect(url_for("production.costo_standard"))
+
+    tutti = StandardCost.query.order_by(StandardCost.year.desc(), StandardCost.month.desc(),
+                                        StandardCost.material_id).all()
+    return render_template("production/costo_standard.html", tutti=tutti, materiali_finiti=materiali_finiti)
+
+
+@production_bp.route("/costo-standard/<int:sc_id>/elimina", methods=["POST"])
+@login_required
+def elimina_costo_standard(sc_id):
+    sc = StandardCost.query.get_or_404(sc_id)
+    db.session.delete(sc)
+    db.session.commit()
+    flash("Costo Standard eliminato.", "success")
+    return redirect(url_for("production.costo_standard"))
 
 
 @production_bp.route("/pool-reparto", methods=["GET", "POST"])
@@ -581,6 +650,19 @@ def completata():
             roh_acc = _acc("150000")
             variazione_acc = _acc("430000")
 
+            # ── Costo Standard: se esiste uno standard applicabile per questo
+            # materiale/periodo, il magazzino si capitalizza ALLO STANDARD e la
+            # differenza col consuntivo va a varianza (Materiali/Manodopera/
+            # Overhead) invece che al consuntivo puro come prima. ──
+            mese_produzione = request.form.get("mese_produzione", "").strip()  # YYYY-MM
+            standard = None
+            if mese_produzione:
+                try:
+                    anno_prod, mese_prod_num = (int(x) for x in mese_produzione.split("-"))
+                    standard = _trova_standard_applicabile(material.id, anno_prod, mese_prod_num)
+                except Exception:
+                    standard = None
+
             # Se il form ha usato "Calcola da distinta base", conosciamo ESATTAMENTE
             # quali componenti sono stati consumati e quanto — li scarichiamo
             # davvero su MasterLogistic-WMS. Se l'importo è stato inserito a mano,
@@ -600,20 +682,66 @@ def completata():
             sposta_stock(material.code, float(qty_produced))
 
             journal_lines = []
-            journal_lines.append({
-                "account_id": fert_acc.id, "dare": totale_cogm, "avere": 0,
-                "description": f"Produzione completata {material.code} × {float(qty_produced):.0f}",
-            })
-            if raw_cost > 0:
+            variance_materiali = Decimal("0")
+            variance_manodopera = Decimal("0")
+            variance_overhead = Decimal("0")
+
+            if standard is not None:
+                # ── Capitalizzazione ALLO STANDARD + varianze sul consuntivo ──
+                std_mat = standard.standard_material_cost * qty_produced
+                std_lab = standard.standard_labor_cost * qty_produced
+                std_oh = standard.standard_overhead_cost * qty_produced
+                std_totale = std_mat + std_lab + std_oh
+
                 journal_lines.append({
-                    "account_id": roh_acc.id, "dare": 0, "avere": raw_cost,
-                    "description": "Consumo materie prime da produzione",
+                    "account_id": fert_acc.id, "dare": std_totale, "avere": 0,
+                    "description": f"Produzione completata {material.code} × {float(qty_produced):.0f} "
+                                    f"(a costo STANDARD — {standard.year}/{standard.month:02d})",
                 })
-            if (labor_cost + overhead_cost) > 0:
+                if raw_cost > 0:
+                    journal_lines.append({"account_id": roh_acc.id, "dare": 0, "avere": raw_cost,
+                                          "description": "Consumo materie prime da produzione (consuntivo)"})
+                if (labor_cost + overhead_cost) > 0:
+                    journal_lines.append({"account_id": variazione_acc.id, "dare": 0, "avere": labor_cost + overhead_cost,
+                                          "description": "Manodopera diretta e costi indiretti capitalizzati (consuntivo)"})
+
+                # Varianza = CONSUNTIVO - STANDARD. Positiva=sfavorevole (Dare
+                # sul conto varianza, si è speso più del previsto); negativa =
+                # favorevole (Avere, si è speso meno del previsto).
+                variance_materiali = (raw_cost - std_mat).quantize(Decimal("0.01"))
+                variance_manodopera = (labor_cost - std_lab).quantize(Decimal("0.01"))
+                variance_overhead = (overhead_cost - std_oh).quantize(Decimal("0.01"))
+
+                for varianza, codice_conto, nome in (
+                    (variance_materiali, "461000", "Materiali"),
+                    (variance_manodopera, "462000", "Manodopera"),
+                    (variance_overhead, "463000", "Overhead"),
+                ):
+                    if varianza == 0:
+                        continue
+                    acc_var = _acc(codice_conto)
+                    if varianza > 0:
+                        journal_lines.append({"account_id": acc_var.id, "dare": varianza, "avere": 0,
+                                              "description": f"Varianza {nome} sfavorevole — {material.code}"})
+                    else:
+                        journal_lines.append({"account_id": acc_var.id, "dare": 0, "avere": -varianza,
+                                              "description": f"Varianza {nome} favorevole — {material.code}"})
+            else:
+                # ── Nessuno standard applicabile: capitalizzazione al CONSUNTIVO, come prima ──
                 journal_lines.append({
-                    "account_id": variazione_acc.id, "dare": 0, "avere": labor_cost + overhead_cost,
-                    "description": "Manodopera diretta e costi indiretti capitalizzati a magazzino",
+                    "account_id": fert_acc.id, "dare": totale_cogm, "avere": 0,
+                    "description": f"Produzione completata {material.code} × {float(qty_produced):.0f}",
                 })
+                if raw_cost > 0:
+                    journal_lines.append({
+                        "account_id": roh_acc.id, "dare": 0, "avere": raw_cost,
+                        "description": "Consumo materie prime da produzione",
+                    })
+                if (labor_cost + overhead_cost) > 0:
+                    journal_lines.append({
+                        "account_id": variazione_acc.id, "dare": 0, "avere": labor_cost + overhead_cost,
+                        "description": "Manodopera diretta e costi indiretti capitalizzati a magazzino",
+                    })
 
             pr_doc_number = DocumentSequence.next_number("PR", "40")
 
@@ -635,6 +763,10 @@ def completata():
                 period_label=request.form.get("period_label", "").strip(),
                 notes=request.form.get("notes", "").strip(),
                 journal_entry_id=entry.id,
+                standard_cost_id=standard.id if standard is not None else None,
+                variance_materiali=variance_materiali,
+                variance_manodopera=variance_manodopera,
+                variance_overhead=variance_overhead,
                 created_by_id=current_user.id,
             )
             db.session.add(pe)
