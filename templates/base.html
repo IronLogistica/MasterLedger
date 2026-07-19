@@ -41,6 +41,7 @@
 
     <div class="sidebar-title">Produzione (ponte verso MasterProduction)</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.completata' }}" href="{{ url_for('production.completata') }}">🏭 Produzione Completata (COGM)</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='production.costo_standard' }}" href="{{ url_for('production.costo_standard') }}">🎯 Costo Standard</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.pool_reparto' }}" href="{{ url_for('production.pool_reparto') }}">🧾 Pool Overhead Reparto</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.rettifiche' }}" href="{{ url_for('production.rettifiche') }}">📐 Rettifiche Overhead Generale</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.margine' }}" href="{{ url_for('production.margine') }}">📈 Costo Pieno / Margine</a>
