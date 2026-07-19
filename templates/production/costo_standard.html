@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Costo Standard{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🎯 Costo Standard di Produzione <span class="tx-code">Prerequisito varianze</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Costo <strong>fissato in anticipo</strong> (es. a inizio mese/anno) per ogni prodotto finito — il riferimento
+      con cui verrà confrontato il consuntivo di ogni Produzione Completata per calcolare le tre varianze
+      (Materiali, Manodopera, Overhead). Una volta inserito, resta valido da quel mese in poi finché non ne
+      inserisci uno più recente per lo stesso prodotto. Se un prodotto non ha nessuno standard, la produzione si
+      capitalizza al consuntivo come sempre (nessuna varianza).
+    </div>
+
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Prodotto Finito <span class="req">*</span></label>
+          <select name="material_id" required>
+            <option value="">—</option>
+            {% for m in materiali_finiti %}
+            <option value="{{ m.id }}">{{ m.code }} — {{ m.description }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Anno <span class="req">*</span></label><input type="number" name="year" required placeholder="2026"></div>
+        <div class="form-group"><label>Mese (1-12) <span class="req">*</span></label><input type="number" name="month" min="1" max="12" required></div>
+      </div>
+      <div class="form-grid" style="margin-top:8px;">
+        <div class="form-group"><label>Costo standard Materiali (€/unità)</label><input type="number" step="0.0001" name="standard_material_cost" placeholder="0,0000"></div>
+        <div class="form-group"><label>Costo standard Manodopera (€/unità)</label><input type="number" step="0.0001" name="standard_labor_cost" placeholder="0,0000"></div>
+        <div class="form-group"><label>Costo standard Overhead (€/unità)</label><input type="number" step="0.0001" name="standard_overhead_cost" placeholder="0,0000"></div>
+      </div>
+      <div class="form-group" style="margin-top:8px;"><label>Note</label><input type="text" name="notes" placeholder="es. base di calcolo usata"></div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Fissa Costo Standard</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Standard fissati</div>
+  <div class="card-body">
+    {% if tutti %}
+    <table class="masterledger-table">
+      <thead><tr><th>Da</th><th>Prodotto</th><th class="td-num">Std Materiali €</th><th class="td-num">Std Manodopera €</th><th class="td-num">Std Overhead €</th><th class="td-num">Std Totale €</th><th></th></tr></thead>
+      <tbody>
+        {% for s in tutti %}
+        <tr>
+          <td class="mono">{{ '%02d'|format(s.month) }}/{{ s.year }}</td>
+          <td>{{ s.material.code }} — {{ s.material.description }}</td>
+          <td class="td-num">{{ '%.4f'|format(s.standard_material_cost) }}</td>
+          <td class="td-num">{{ '%.4f'|format(s.standard_labor_cost) }}</td>
+          <td class="td-num">{{ '%.4f'|format(s.standard_overhead_cost) }}</td>
+          <td class="td-num fw-bold">{{ '%.4f'|format(s.standard_total_unitario) }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('production.elimina_costo_standard', sc_id=s.id) }}" onsubmit="return confirm('Eliminare questo standard?');">
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px;">🗑️</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuno standard fissato ancora.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

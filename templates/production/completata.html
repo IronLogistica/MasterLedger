@@ -33,6 +33,11 @@
           </select>
         </div>
         <div class="form-group"><label>Periodo</label><input type="text" name="period_label" placeholder="es. Luglio 2026"></div>
+        <div class="form-group">
+          <label>Mese di produzione (per Costo Standard)</label>
+          <input type="month" name="mese_produzione">
+          <div style="font-size:11px;margin-top:2px;"><a href="{{ url_for('production.costo_standard') }}">Gestisci i Costi Standard →</a></div>
+        </div>
         <div class="form-group"><label>Quantità prodotta <span class="req">*</span></label><input type="number" step="0.001" name="qty_produced" required></div>
       </div>
 
@@ -81,7 +86,7 @@
   <div class="card-body">
     {% if ultime %}
     <table class="masterledger-table">
-      <thead><tr><th>Numero</th><th>Data</th><th>Periodo</th><th>Prodotto</th><th class="td-num">Qtà</th><th class="td-num">Materie Prime</th><th class="td-num">Manodopera</th><th class="td-num">Costi Indiretti</th><th class="td-num">Totale COGM</th><th>Scrittura</th></tr></thead>
+      <thead><tr><th>Numero</th><th>Data</th><th>Periodo</th><th>Prodotto</th><th class="td-num">Qtà</th><th class="td-num">Materie Prime</th><th class="td-num">Manodopera</th><th class="td-num">Costi Indiretti</th><th class="td-num">Totale COGM</th><th>Varianze (Mat/Man/OH)</th><th>Scrittura</th></tr></thead>
       <tbody>
         {% for p in ultime %}
         <tr>
@@ -94,6 +99,13 @@
           <td class="td-num">{{ '%.2f'|format(p.direct_labor_cost) }} €</td>
           <td class="td-num">{{ '%.2f'|format(p.overhead_cost) }} €</td>
           <td class="td-num fw-bold">{{ '%.2f'|format(p.total_cogm) }} €</td>
+          <td class="mono" style="font-size:11.5px;">
+            {% if p.usa_standard %}
+              <span class="{{ 'color-red' if p.variance_materiali > 0 else 'color-green' }}">{{ '%+.2f'|format(p.variance_materiali) }}</span> /
+              <span class="{{ 'color-red' if p.variance_manodopera > 0 else 'color-green' }}">{{ '%+.2f'|format(p.variance_manodopera) }}</span> /
+              <span class="{{ 'color-red' if p.variance_overhead > 0 else 'color-green' }}">{{ '%+.2f'|format(p.variance_overhead) }}</span>
+            {% else %}<span style="color:var(--ml-muted);">nessuno standard</span>{% endif %}
+          </td>
           <td>{% if p.journal_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=p.journal_entry_id) }}">{{ p.journal_entry.doc_number }}</a>{% else %}—{% endif %}</td>
         </tr>
         {% endfor %}
