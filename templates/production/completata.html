@@ -37,10 +37,18 @@
       </div>
 
       <div class="form-grid" style="margin-top:8px;">
-        <div class="form-group"><label>Materie prime consumate (€)</label><input type="number" step="0.01" name="raw_material_cost" placeholder="0,00"></div>
+        <div class="form-group">
+          <label>Materie prime consumate (€)</label>
+          <div style="display:flex; gap:6px;">
+            <input type="number" step="0.01" name="raw_material_cost" id="raw_material_cost" placeholder="0,00" oninput="document.getElementById('bom_usata').value='0';">
+            <button type="button" class="btn btn-ghost" onclick="calcolaDaBOM()">📐 Da distinta base</button>
+          </div>
+          <div id="bom-esito" style="margin-top:6px; font-size:12px;"></div>
+        </div>
         <div class="form-group"><label>Manodopera diretta (€)</label><input type="number" step="0.01" name="direct_labor_cost" placeholder="da Analisi Tempi (MasterWork)"></div>
         <div class="form-group"><label>Costi indiretti di produzione (€)</label><input type="number" step="0.01" name="overhead_cost" placeholder="quota mensile taglio/foratura"></div>
       </div>
+      <input type="hidden" name="bom_usata" id="bom_usata" value="0">
 
       <div class="form-group" style="margin-top:8px;">
         <label>Note</label>
@@ -78,4 +86,37 @@
     {% else %}<div class="empty-state">Nessuna produzione registrata.</div>{% endif %}
   </div>
 </div>
+
+<script>
+async function calcolaDaBOM() {
+  const materialSel = document.querySelector('select[name="material_id"]');
+  const qtyInput = document.querySelector('input[name="qty_produced"]');
+  const esito = document.getElementById('bom-esito');
+
+  if (!materialSel.value) { esito.innerHTML = '<span style="color:var(--ml-red);">Seleziona prima il prodotto finito.</span>'; return; }
+  if (!qtyInput.value || parseFloat(qtyInput.value) <= 0) { esito.innerHTML = '<span style="color:var(--ml-red);">Inserisci prima la quantità prodotta.</span>'; return; }
+
+  esito.innerHTML = '⏳ Leggo la distinta base da MasterLogistic-WMS...';
+  try {
+    const resp = await fetch(`/produzione/calcola-materie-prime?material_id=${materialSel.value}&qty=${qtyInput.value}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ ${data.error}</span>`;
+      return;
+    }
+    document.getElementById('raw_material_cost').value = data.totale.toFixed(2);
+    document.getElementById('bom_usata').value = '1';
+
+    let righe = data.dettaglio.map(d =>
+      `${d.codice} (${d.descrizione}): ${d.quantita_necessaria.toFixed(2)} × ` +
+      (d.costo_unitario !== null ? `€${d.costo_unitario.toFixed(2)} = €${d.costo_totale.toFixed(2)}` : '<em>costo sconosciuto</em>')
+    ).join('<br>');
+    let msg = `<span style="color:var(--ml-green);">✅ Calcolato da distinta base (quando registri, i componenti verranno scaricati davvero su MasterLogistic-WMS):</span><br>${righe}`;
+    if (data.avviso) msg += `<br><span style="color:#b8860b;">⚠️ ${data.avviso}</span>`;
+    esito.innerHTML = msg;
+  } catch (e) {
+    esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ Errore di rete: ${e}</span>`;
+  }
+}
+</script>
 {% endblock %}
