@@ -172,6 +172,19 @@ def orders():
                            customers=customers, materials=materials)
 
 
+@sd_bp.route("/orders/<int:order_id>/conferma")
+@login_required
+def order_confirmation(order_id):
+    """
+    Conferma d'Ordine — documento formale da mandare al cliente, distinto
+    dall'Ordine stesso (SalesOrder) che resta il record di sistema. Non è un
+    nuovo modello dati: rilegge i dati del SalesOrder e li presenta in un
+    layout stampabile pensato per il cliente (niente dettagli interni).
+    """
+    o = SalesOrder.query.get_or_404(order_id)
+    return render_template("sd/order_confirmation.html", o=o)
+
+
 # ══════════════════════════════════════════════════════════════
 # DDT / USCITA MERCI (VL01N + PGI 601) — qui nasce il COSTO DEL VENDUTO
 # ══════════════════════════════════════════════════════════════
