@@ -243,21 +243,38 @@ def invoice_verification():
                     flash(f"⛔ {b}", "danger")
                 return redirect(url_for("mm.invoice_verification"))
 
-            # ── Registrazione: Dare EM-RF + IVA / Avere Fornitore ──
+            # ── Registrazione: Dare EM-RF (al prezzo ORDINE, per chiuderlo esattamente)
+            # + Dare/Avere Varianza Prezzo Materiali (differenza vs prezzo FATTURA)
+            # + Dare IVA / Avere Fornitore (al prezzo FATTURA, quello davvero dovuto) ──
             emrf_acc = _acc("165000")
             vat_acc = _acc("154000")
             ap_acc = _acc("210000")
+            variance_acc = _acc("460000")
 
-            total_net = Decimal("0")
+            total_net_invoice = Decimal("0")
             journal_lines = []
             for r in match_rows:
-                net = (r["qty"] * r["price"]).quantize(Decimal("0.01"))
-                total_net += net
-                journal_lines.append({"account_id": emrf_acc.id, "dare": net, "avere": 0,
-                                      "description": f"Chiusura EM/RF {r['line'].material.code}"})
-                r["line"].qty_invoiced = Decimal(str(r["line"].qty_invoiced or 0)) + r["qty"]
-            total_vat = (total_net * vat_rate / 100).quantize(Decimal("0.01"))
-            gross = total_net + total_vat
+                l = r["line"]
+                net_gr = (r["qty"] * Decimal(str(l.price))).quantize(Decimal("0.01"))       # prezzo ORDINE, quanto è stato accreditato in EM/RF all'entrata merci
+                net_invoice = (r["qty"] * r["price"]).quantize(Decimal("0.01"))              # prezzo FATTURA, quanto è davvero dovuto al fornitore
+                total_net_invoice += net_invoice
+
+                journal_lines.append({"account_id": emrf_acc.id, "dare": net_gr, "avere": 0,
+                                      "description": f"Chiusura EM/RF {l.material.code}"})
+
+                varianza = net_invoice - net_gr
+                if varianza > 0:
+                    journal_lines.append({"account_id": variance_acc.id, "dare": varianza, "avere": 0,
+                                          "description": f"Varianza prezzo sfavorevole {l.material.code} "
+                                                          f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)"})
+                elif varianza < 0:
+                    journal_lines.append({"account_id": variance_acc.id, "dare": 0, "avere": -varianza,
+                                          "description": f"Varianza prezzo favorevole {l.material.code} "
+                                                          f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)"})
+
+                l.qty_invoiced = Decimal(str(l.qty_invoiced or 0)) + r["qty"]
+            total_vat = (total_net_invoice * vat_rate / 100).quantize(Decimal("0.01"))
+            gross = total_net_invoice + total_vat
             if total_vat:
                 journal_lines.append({"account_id": vat_acc.id, "dare": total_vat, "avere": 0,
                                       "description": f"IVA a credito {float(vat_rate):.0f}%"})
@@ -273,7 +290,7 @@ def invoice_verification():
             )
             db.session.commit()
             flash(f"✅ Three-way match superato. Fattura {entry.doc_number} registrata — "
-                  f"{float(gross):.2f} € (imponibile {float(total_net):.2f} + IVA {float(total_vat):.2f}). "
+                  f"{float(gross):.2f} € (imponibile {float(total_net_invoice):.2f} + IVA {float(total_vat):.2f}). "
                   f"Debito v/{po.party.name} aperto in Pagamenti fornitori.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
         except (UnbalancedEntryError, ValueError) as e:
