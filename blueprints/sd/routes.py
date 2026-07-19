@@ -28,6 +28,7 @@ from models import (
     JournalEntry,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.logistic_client import get_stock, LogisticError
 
 sd_bp = Blueprint("sd", __name__, template_folder="../../templates/sd")
 
@@ -190,18 +191,25 @@ def deliveries():
             flash(f"L'ordine {o.doc_number} è già stato consegnato.", "warning")
             return redirect(url_for("sd.deliveries"))
 
-        # ── controllo disponibilità ──────────────────────────
-        to_ship = []
-        for l in o.lines:
-            residual = Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0))
-            if residual <= 0:
-                continue
-            if Decimal(str(l.material.qty_on_hand)) < residual:
-                flash(f"Giacenza insufficiente per {l.material.code}: "
-                      f"disponibili {float(l.material.qty_on_hand):.0f}, richiesti {float(residual):.0f}. "
-                      f"Registra prima un'Entrata Merci (MM).", "danger")
-                return redirect(url_for("sd.deliveries"))
-            to_ship.append((l, residual))
+        # ── controllo disponibilità (FIX: MasterLogistic-WMS è ora l'unica
+        # fonte di verità per la giacenza — non usiamo più la copia locale) ──
+        try:
+            to_ship = []
+            for l in o.lines:
+                residual = Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0))
+                if residual <= 0:
+                    continue
+                stock_wms = get_stock(l.material.code)
+                disponibile = Decimal(str(stock_wms.get("stock", 0))) if stock_wms else Decimal("0")
+                if disponibile < residual:
+                    flash(f"Giacenza insufficiente per {l.material.code} su MasterLogistic-WMS: "
+                          f"disponibili {float(disponibile):.0f}, richiesti {float(residual):.0f}. "
+                          f"Registra prima un'Entrata Merci (MM).", "danger")
+                    return redirect(url_for("sd.deliveries"))
+                to_ship.append((l, residual))
+        except LogisticError as e:
+            flash(str(e), "danger")
+            return redirect(url_for("sd.deliveries"))
         if not to_ship:
             flash("Nulla da consegnare su questo ordine.", "warning")
             return redirect(url_for("sd.deliveries"))
@@ -225,7 +233,10 @@ def deliveries():
                 line_cogs = (qty * unit_cost).quantize(Decimal("0.01"))
                 db.session.add(DeliveryLine(delivery_id=d.id, material_id=l.material_id,
                                             qty=qty, price=l.price, unit_cost=unit_cost))
-                l.material.qty_on_hand = Decimal(str(l.material.qty_on_hand)) - qty
+                # NOTA (decisione di Mauri): per ora MasterLedger SOLO LEGGE la
+                # giacenza da MasterLogistic-WMS (controllo disponibilità qui
+                # sopra), non scrive ancora. Lo scarico fisico avviene nel
+                # processo di MasterLogistic-WMS stesso (evasione/spedizione).
                 l.qty_delivered = Decimal(str(l.qty_delivered or 0)) + qty
                 if line_cogs > 0:
                     inv_acc = _acc(l.material.inventory_account_code)
@@ -249,7 +260,7 @@ def deliveries():
             db.session.commit()
             flash(f"DDT {d.doc_number} registrato — Uscita Merci eseguita, "
                   f"Costo del Venduto {float(total_cogs):.2f} € contabilizzato.", "success")
-        except (UnbalancedEntryError, ValueError) as e:
+        except (UnbalancedEntryError, ValueError, LogisticError) as e:
             db.session.rollback()
             flash(str(e), "danger")
         return redirect(url_for("sd.deliveries"))
