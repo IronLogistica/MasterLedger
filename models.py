@@ -659,16 +659,69 @@ class ProductionEntry(db.Model):
     overhead_cost = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     notes = db.Column(db.String(300))
 
+    # Se al momento della registrazione esisteva un Costo Standard per questo
+    # materiale/periodo, il magazzino viene capitalizzato ALLO STANDARD (non
+    # più al consuntivo) e queste tre varianze vengono postate e salvate qui
+    # per tracciabilità. Restano a 0 se non c'era nessuno standard applicabile
+    # (in quel caso si capitalizza al consuntivo come sempre, senza varianze).
+    standard_cost_id = db.Column(db.Integer, db.ForeignKey("standard_costs.id"), nullable=True)
+    variance_materiali = db.Column(db.Numeric(14, 2), nullable=False, default=0)   # >0 sfavorevole, <0 favorevole
+    variance_manodopera = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    variance_overhead = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+
     journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     material = db.relationship("Material")
     journal_entry = db.relationship("JournalEntry")
+    standard_cost = db.relationship("StandardCost")
 
     @property
     def total_cogm(self):
         return (self.raw_material_cost or 0) + (self.direct_labor_cost or 0) + (self.overhead_cost or 0)
+
+    @property
+    def usa_standard(self):
+        return self.standard_cost_id is not None
+
+
+class StandardCost(db.Model):
+    """
+    Costo Standard di un prodotto finito, FISSATO IN ANTICIPO (es. a inizio
+    mese/anno) — il prerequisito per fare le varianze di produzione alla SAP.
+    A differenza del costo consuntivo (quello che si registra volta per volta
+    in Produzione Completata), questo è un valore di RIFERIMENTO deciso PRIMA,
+    con cui il consuntivo verrà confrontato per calcolare le varianze:
+
+        Varianza Materiali   = costo materiali CONSUNTIVO - costo materiali STANDARD
+        Varianza Manodopera  = costo manodopera CONSUNTIVO - costo manodopera STANDARD
+        Varianza Overhead    = costo overhead CONSUNTIVO - costo overhead STANDARD
+
+    (positivo = sfavorevole, si è speso più del previsto; negativo = favorevole)
+
+    Un valore >0 di ciascuna componente STANDARD è "per unità prodotta" (costo
+    standard unitario), moltiplicato per qty_produced al momento del confronto.
+    """
+    __tablename__ = "standard_costs"
+    id = db.Column(db.Integer, primary_key=True)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    year = db.Column(db.Integer, nullable=False)
+    month = db.Column(db.Integer, nullable=False)  # 1-12: valido da questo mese in poi, fino al prossimo standard dello stesso materiale
+
+    standard_material_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)   # € per unità
+    standard_labor_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)      # € per unità
+    standard_overhead_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)   # € per unità
+
+    notes = db.Column(db.String(300))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    material = db.relationship("Material")
+
+    @property
+    def standard_total_unitario(self):
+        return (self.standard_material_cost or 0) + (self.standard_labor_cost or 0) + (self.standard_overhead_cost or 0)
 
 
 class ProductionOverheadItem(db.Model):
