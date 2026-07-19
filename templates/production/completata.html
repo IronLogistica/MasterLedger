@@ -46,7 +46,23 @@
           <div id="bom-esito" style="margin-top:6px; font-size:12px;"></div>
         </div>
         <div class="form-group"><label>Manodopera diretta (€)</label><input type="number" step="0.01" name="direct_labor_cost" placeholder="da Analisi Tempi (MasterWork)"></div>
-        <div class="form-group"><label>Costi indiretti di produzione (€)</label><input type="number" step="0.01" name="overhead_cost" placeholder="quota mensile taglio/foratura"></div>
+        <div class="form-group">
+          <label>Costi indiretti di produzione (€)</label>
+          <div style="display:flex; gap:6px;">
+            <input type="number" step="0.01" name="overhead_cost" id="overhead_cost" placeholder="quota mensile taglio/foratura">
+          </div>
+          <div style="display:flex; gap:6px; margin-top:6px;">
+            <input type="month" id="mese_riferimento" style="flex:1;">
+            <button type="button" class="btn btn-ghost" onclick="calcolaOverhead()">📊 Da fatturato</button>
+          </div>
+          <div style="margin-top:6px;">
+            <label style="font-size:12px;">Peso fatturato vs costo primo: <span id="peso_label">100% fatturato / 0% costo primo</span></label>
+            <input type="range" id="peso_fatturato" min="0" max="100" value="100" step="10"
+                   oninput="document.getElementById('peso_label').textContent = this.value + '% fatturato / ' + (100-this.value) + '% costo primo';">
+          </div>
+          <div id="overhead-esito" style="margin-top:6px; font-size:12px;"></div>
+          <div style="margin-top:4px; font-size:11.5px;"><a href="{{ url_for('production.pool_reparto') }}">Gestisci il pool di costi indiretti del reparto →</a></div>
+        </div>
       </div>
       <input type="hidden" name="bom_usata" id="bom_usata" value="0">
 
@@ -112,6 +128,39 @@ async function calcolaDaBOM() {
       (d.costo_unitario !== null ? `€${d.costo_unitario.toFixed(2)} = €${d.costo_totale.toFixed(2)}` : '<em>costo sconosciuto</em>')
     ).join('<br>');
     let msg = `<span style="color:var(--ml-green);">✅ Calcolato da distinta base (quando registri, i componenti verranno scaricati davvero su MasterLogistic-WMS):</span><br>${righe}`;
+    if (data.avviso) msg += `<br><span style="color:#b8860b;">⚠️ ${data.avviso}</span>`;
+    esito.innerHTML = msg;
+  } catch (e) {
+    esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ Errore di rete: ${e}</span>`;
+  }
+}
+async function calcolaOverhead() {
+  const materialSel = document.querySelector('select[name="material_id"]');
+  const mese = document.getElementById('mese_riferimento').value;
+  const peso = document.getElementById('peso_fatturato').value;
+  const esito = document.getElementById('overhead-esito');
+
+  if (!materialSel.value) { esito.innerHTML = '<span style="color:var(--ml-red);">Seleziona prima il prodotto finito.</span>'; return; }
+  if (!mese) { esito.innerHTML = '<span style="color:var(--ml-red);">Seleziona il mese di riferimento.</span>'; return; }
+
+  esito.innerHTML = '⏳ Leggo il pool di reparto, il fatturato e il costo primo...';
+  try {
+    const resp = await fetch(`/produzione/calcola-overhead?material_id=${materialSel.value}&mese=${mese}&peso_fatturato=${peso}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      let msg = `<span style="color:var(--ml-red);">⚠️ ${data.error}</span>`;
+      if (data.dettaglio && data.dettaglio.length) {
+        msg += '<br>Dati carpenteria propria nel mese:<br>' +
+          data.dettaglio.map(d => `${d.codice} (${d.descrizione}): fatturato €${d.fatturato.toFixed(2)} (${d.quota_fatturato_pct.toFixed(1)}%), costo primo €${d.costo_primo.toFixed(2)} (${d.quota_costo_primo_pct.toFixed(1)}%) → mix ${d.quota_pct.toFixed(1)}%`).join('<br>');
+      }
+      esito.innerHTML = msg;
+      return;
+    }
+    document.getElementById('overhead_cost').value = data.quota.toFixed(2);
+    let righe = data.dettaglio.map(d =>
+      `${d.codice} (${d.descrizione}): fatturato €${d.fatturato.toFixed(2)} (${d.quota_fatturato_pct.toFixed(1)}%) + costo primo €${d.costo_primo.toFixed(2)} (${d.quota_costo_primo_pct.toFixed(1)}%) → quota mix ${d.quota_pct.toFixed(1)}%`
+    ).join('<br>');
+    let msg = `<span style="color:var(--ml-green);">✅ Pool di reparto del mese: €${data.pool_totale.toFixed(2)}.</span><br>${righe}`;
     if (data.avviso) msg += `<br><span style="color:#b8860b;">⚠️ ${data.avviso}</span>`;
     esito.innerHTML = msg;
   } catch (e) {

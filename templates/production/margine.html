@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Costo Pieno / Margine{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📈 Costo Pieno e Margine di Profitto <span class="tx-code">Report gestionale — non contabile</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Report <strong>informativo</strong> (non genera nessuna scrittura contabile): per ogni prodotto venduto nel mese,
+      il costo pieno = costo di produzione (materie prime + manodopera + overhead di reparto, dal COGM se fabbricato
+      questo mese, altrimenti costo standard) + quota di <strong>overhead generale aziendale</strong> (spalmato sul
+      fatturato di TUTTI i prodotti del mese). Confrontato col prezzo di vendita per il margine.
+    </div>
+
+    <form method="GET" class="form-grid" style="margin-bottom:14px;">
+      <div class="form-group"><label>Mese</label><input type="month" name="mese" value="{{ mese }}" onchange="this.form.submit()"></div>
+      <div class="form-group">
+        <label>Peso fatturato vs costo primo: {{ peso_fatturato|int }}% / {{ (100-peso_fatturato)|int }}%</label>
+        <input type="range" name="peso_fatturato" min="0" max="100" step="10" value="{{ peso_fatturato|int }}" onchange="this.form.submit()">
+      </div>
+    </form>
+
+    <div class="theory-note" style="margin-bottom:14px;">
+      <strong>Overhead generale del mese: {{ '%.2f'|format(livello2.totale) }} €</strong><br>
+      = Costi totali a conto economico ({{ '%.2f'|format(livello2.costi_totali_ge) }} €)
+      − pool di reparto già imputato ({{ '%.2f'|format(livello2.overhead_reparto_dedotto) }} €)
+      + rettifiche ratei/risconti ({{ '%.2f'|format(livello2.rettifiche) }} €).
+      Fatturato totale del mese (base di riparto): {{ '%.2f'|format(fatturato_totale_mese) }} €.
+      Costo primo totale del mese (base alternativa): {{ '%.2f'|format(costo_primo_totale_mese) }} €.
+      <a href="{{ url_for('production.rettifiche') }}">Gestisci le rettifiche →</a>
+      &nbsp;|&nbsp;
+      <a href="{{ url_for('production.pool_reparto') }}">Gestisci il pool di reparto →</a>
+    </div>
+
+    {% if righe %}
+    <table class="masterledger-table">
+      <thead><tr>
+        <th>Codice</th><th>Descrizione</th><th class="td-num">Qtà venduta</th><th class="td-num">Fatturato €</th>
+        <th class="td-num">Costo base unit. €</th><th>Fonte costo</th>
+        <th class="td-num">Quota overhead gen. unit. €</th><th class="td-num">Costo pieno unit. €</th>
+        <th class="td-num">Prezzo vendita €</th><th class="td-num">Margine unit. €</th><th class="td-num">Margine %</th>
+      </tr></thead>
+      <tbody>
+        {% for r in righe %}
+        <tr>
+          <td class="mono fw-bold">{{ r.codice }}</td>
+          <td>{{ r.descrizione }}</td>
+          <td class="td-num">{{ '%.0f'|format(r.qty_venduta) }}</td>
+          <td class="td-num">{{ '%.2f'|format(r.fatturato) }}</td>
+          <td class="td-num">{{ '%.4f'|format(r.costo_base_unitario) }}</td>
+          <td style="font-size:11px;color:var(--ml-muted);">{{ r.fonte_costo }}</td>
+          <td class="td-num">{{ '%.4f'|format(r.quota_overhead_generale_unitaria) }}</td>
+          <td class="td-num fw-bold">{{ '%.4f'|format(r.costo_pieno_unitario) }}</td>
+          <td class="td-num">{{ '%.4f'|format(r.prezzo_vendita) }}</td>
+          <td class="td-num {{ 'color-red' if r.margine_unitario < 0 else 'color-green' }}">{{ '%.4f'|format(r.margine_unitario) }}</td>
+          <td class="td-num {{ 'color-red' if (r.margine_pct is not none and r.margine_pct < 0) else 'color-green' }}">
+            {{ '%.1f'|format(r.margine_pct) if r.margine_pct is not none else '—' }}{{ '%' if r.margine_pct is not none }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna consegna trovata per questo mese.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

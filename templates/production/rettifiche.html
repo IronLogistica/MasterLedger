@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Rettifiche Overhead Generale{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📐 Rettifiche Overhead Generale (Ratei/Risconti) <span class="tx-code">Livello 2</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Correzioni manuali al calcolo automatico dell'overhead generale aziendale del mese (tutti i costi indiretti
+      MENO quelli già imputati al pool di reparto). Un <strong>rateo</strong> è un costo di competenza del mese non
+      ancora registrato in contabilità (importo positivo). Un <strong>risconto</strong> è un costo già registrato
+      ma di competenza di mesi futuri (importo negativo).
+    </div>
+
+    <form method="POST">
+      <div class="form-grid">
+        <div class="form-group"><label>Anno <span class="req">*</span></label><input type="number" name="year" required placeholder="2026"></div>
+        <div class="form-group"><label>Mese (1-12) <span class="req">*</span></label><input type="number" name="month" min="1" max="12" required></div>
+        <div class="form-group"><label>Descrizione <span class="req">*</span></label><input type="text" name="description" required placeholder="es. Rateo assicurazione annuale"></div>
+        <div class="form-group"><label>Importo (€) <span class="req">*</span></label><input type="number" step="0.01" name="amount" required placeholder="positivo=rateo, negativo=risconto"></div>
+      </div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Aggiungi Rettifica</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Rettifiche inserite</div>
+  <div class="card-body">
+    {% if rettifiche %}
+    <table class="masterledger-table">
+      <thead><tr><th>Mese</th><th>Descrizione</th><th class="td-num" style="width:140px;">Importo €</th><th style="width:60px;"></th></tr></thead>
+      <tbody>
+        {% for r in rettifiche %}
+        <tr>
+          <td class="mono">{{ '%02d'|format(r.month) }}/{{ r.year }}</td>
+          <td>{{ r.description }}</td>
+          <td class="td-num {{ 'color-red' if r.amount < 0 else 'color-green' }}">{{ '%.2f'|format(r.amount) }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('production.elimina_rettifica', adj_id=r.id) }}" onsubmit="return confirm('Eliminare questa rettifica?');">
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px;">🗑️</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna rettifica inserita.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
