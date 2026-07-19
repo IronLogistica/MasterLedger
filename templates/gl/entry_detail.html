@@ -45,6 +45,7 @@
     {% if entry.doc_type in ('DR', 'DG') and not entry.is_reversed %}
     <div style="margin-top:16px;">
       <a href="{{ url_for('ar.invoice_xml', entry_id=entry.id) }}" class="btn btn-primary">📎 Scarica XML FatturaPA</a>
+      <a href="{{ url_for('ar.invoice_cortesia', entry_id=entry.id) }}" class="btn btn-ghost" target="_blank">📄 Fattura di Cortesia (non fiscale)</a>
       <div style="font-size:12px; color:var(--ml-label); margin-top:6px;">
         Dopo il download, carica il file sul pannello del tuo intermediario (es. Aruba Fatturazione Elettronica →
         "Carica Fatture") per firma e invio allo SdI. Se mancano dati obbligatori (azienda o cliente) comparirà
