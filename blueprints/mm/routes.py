@@ -151,7 +151,10 @@ def goods_receipts():
                                       "description": f"Carico {l.material.code} × {float(qty):.0f}"})
                 total += value
                 db.session.add(GoodsReceiptLine(receipt_id=gr.id, po_line_id=l.id, qty=qty))
-                l.material.qty_on_hand = Decimal(str(l.material.qty_on_hand)) + qty
+                # NOTA (decisione di Mauri): per ora MasterLedger SOLO LEGGE la
+                # giacenza da MasterLogistic-WMS, non scrive ancora. L'aggiornamento
+                # fisico della giacenza per questo DDT avviene nel processo di
+                # MasterLogistic-WMS stesso (carico da DDT fornitore), non qui.
                 l.qty_received = Decimal(str(l.qty_received or 0)) + qty
                 received_any = True
 
