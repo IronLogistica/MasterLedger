@@ -27,4 +27,26 @@
     </form>
   </div>
 </div>
+<div class="card">
+  <div class="card-header">🧪 Ambiente di Test SdI <span class="tx-code">COLLAUDO</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Prepara con un click tutto il necessario per <strong>collaudare l'XML FatturaPA</strong> con il
+      software di controllo dell'Agenzia delle Entrate: un <strong>cliente finto</strong> (CLIENTE TEST SRL,
+      P.IVA 99999999990 con checksum valido, SDI 0000000), un <strong>prodotto finto</strong> (SEGN-TEST,
+      giacenza 999) e — solo se i campi sono ancora vuoti — un <strong>cedente di prova</strong>
+      (P.IVA 12345678903). I dati reali già inseriti NON vengono toccati.
+    </div>
+    <form method="POST" action="{{ url_for('dashboard.ambiente_test') }}">
+      <button class="btn btn-primary" type="submit">🧪 Prepara ambiente di test</button>
+    </form>
+    <div class="theory-note" style="margin-top:12px;">
+      Percorso di collaudo (senza toccare il WMS): <strong>Ciclo Cliente → Fattura cliente</strong> →
+      CLIENTE TEST SRL, riga "Cartello di prova SEGN-TEST", imponibile 250, IVA 22 → registra →
+      <strong>scarica XML</strong> dal dettaglio → carica il file su
+      <span class="mono">fatturapa.gov.it → Controlla la Fattura</span>.
+      Il file di collaudo non va mai firmato né trasmesso allo SdI.
+    </div>
+  </div>
+</div>
 {% endblock %}
