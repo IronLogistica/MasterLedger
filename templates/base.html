@@ -65,6 +65,9 @@
     <a class="sidebar-link {{ 'active' if request.endpoint=='assets.asset_create' }}" href="{{ url_for('assets.asset_create') }}">➕ Nuovo cespite</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='assets.depreciation' }}" href="{{ url_for('assets.depreciation') }}">📉 Ammortamenti</a>
 
+    <div class="sidebar-title">Paghe</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint and request.endpoint.startswith('payroll.') }}" href="{{ url_for('payroll.index') }}">👥 Import Paghe / F24</a>
+
     <div class="sidebar-title">Controllo costi</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='costs.cost_centers' }}" href="{{ url_for('costs.cost_centers') }}">🏷️ Centri di costo</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='costs.report' }}" href="{{ url_for('costs.report') }}">📊 Report Costi</a>
