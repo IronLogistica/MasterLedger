@@ -760,3 +760,101 @@ class OverheadAdjustment(db.Model):
     amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)  # + aumenta l'overhead, - lo riduce
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# ══════════════════════════════════════════════════════════════
+# PAGHE / F24 — import PDF con revisione prima della contabilizzazione
+# ══════════════════════════════════════════════════════════════
+class PayrollEmployeeMapping(db.Model):
+    __tablename__ = "payroll_employee_mappings"
+    id = db.Column(db.Integer, primary_key=True)
+    employee_key = db.Column(db.String(80), unique=True, nullable=False)  # CF, oppure codice Zucchetti
+    employee_name = db.Column(db.String(160), nullable=False)
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    cost_center = db.relationship("CostCenter")
+
+
+class PayrollAccountConfig(db.Model):
+    __tablename__ = "payroll_account_configs"
+    id = db.Column(db.Integer, primary_key=True)
+    wage_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    employer_burden_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    net_salary_payable_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    inps_payable_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    withholding_payable_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    bank_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    imu_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    accrued_holiday_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    accrued_permission_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    accrued_thirteenth_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    accrued_payable_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    tfr_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    tfr_fund_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    wage_expense_account = db.relationship("Account", foreign_keys=[wage_expense_account_id])
+    employer_burden_account = db.relationship("Account", foreign_keys=[employer_burden_account_id])
+    net_salary_payable_account = db.relationship("Account", foreign_keys=[net_salary_payable_account_id])
+    inps_payable_account = db.relationship("Account", foreign_keys=[inps_payable_account_id])
+    withholding_payable_account = db.relationship("Account", foreign_keys=[withholding_payable_account_id])
+    bank_account = db.relationship("Account", foreign_keys=[bank_account_id])
+    imu_expense_account = db.relationship("Account", foreign_keys=[imu_expense_account_id])
+    accrued_holiday_expense_account = db.relationship("Account", foreign_keys=[accrued_holiday_expense_account_id])
+    accrued_permission_expense_account = db.relationship("Account", foreign_keys=[accrued_permission_expense_account_id])
+    accrued_thirteenth_expense_account = db.relationship("Account", foreign_keys=[accrued_thirteenth_expense_account_id])
+    accrued_payable_account = db.relationship("Account", foreign_keys=[accrued_payable_account_id])
+    tfr_expense_account = db.relationship("Account", foreign_keys=[tfr_expense_account_id])
+    tfr_fund_account = db.relationship("Account", foreign_keys=[tfr_fund_account_id])
+
+
+class F24ImuMapping(db.Model):
+    """Optional remembered default for an IMU municipality/tribute pair."""
+    __tablename__ = "f24_imu_mappings"
+    id = db.Column(db.Integer, primary_key=True)
+    municipality_code = db.Column(db.String(8), nullable=False)
+    tribute_code = db.Column(db.String(12), nullable=False)
+    expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False)
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (db.UniqueConstraint("municipality_code", "tribute_code", name="uq_f24_imu_mapping"),)
+    expense_account = db.relationship("Account")
+    cost_center = db.relationship("CostCenter")
+
+
+class PayrollImport(db.Model):
+    __tablename__ = "payroll_imports"
+    id = db.Column(db.Integer, primary_key=True)
+    document_kind = db.Column(db.String(12), nullable=False)  # PAYSLIP, F24
+    filename = db.Column(db.String(255), nullable=False)
+    fingerprint = db.Column(db.String(64), nullable=False, unique=True)
+    document_reference = db.Column(db.String(120), nullable=True)
+    document_date = db.Column(db.Date, nullable=True)
+    parsed_data = db.Column(db.Text, nullable=False)  # reviewed extraction snapshot, JSON
+    status = db.Column(db.String(20), nullable=False, default="review")
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    posted_at = db.Column(db.DateTime, nullable=True)
+    journal_entry = db.relationship("JournalEntry")
+
+class PayrollEmployeeAllocation(db.Model):
+    """Percentual split; legacy PayrollEmployeeMapping.cost_center_id remains readable."""
+    __tablename__ = "payroll_employee_allocations"
+    id = db.Column(db.Integer, primary_key=True)
+    mapping_id = db.Column(db.Integer, db.ForeignKey("payroll_employee_mappings.id"), nullable=False)
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=False)
+    percentage = db.Column(db.Numeric(5, 2), nullable=False)
+    mapping = db.relationship("PayrollEmployeeMapping", backref=db.backref("allocations", cascade="all, delete-orphan"))
+    cost_center = db.relationship("CostCenter")
+    __table_args__ = (db.UniqueConstraint("mapping_id", "cost_center_id", name="uq_payroll_mapping_center"),)
+
+
+class AllocationSplit(db.Model):
+    """Generic future-ready allocation for AP/AR documents and commercial lines."""
+    __tablename__ = "allocation_splits"
+    id = db.Column(db.Integer, primary_key=True)
+    document_type = db.Column(db.String(30), nullable=False)
+    document_id = db.Column(db.Integer, nullable=False)
+    document_line_id = db.Column(db.Integer, nullable=True)
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=False)
+    percentage = db.Column(db.Numeric(5, 2), nullable=False)
+    cost_center = db.relationship("CostCenter")
+    __table_args__ = (db.UniqueConstraint("document_type", "document_id", "document_line_id", "cost_center_id", name="uq_allocation_split_target_center"),)
