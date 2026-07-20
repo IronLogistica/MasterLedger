@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block title %}Paghe e F24{% endblock %}{% block content %}
+<h1>Paghe e F24</h1><p>Import PDF Zucchetti/F24 con revisione obbligatoria prima della prima nota.</p>
+<p><a class="btn" href="{{ url_for('payroll.config') }}">⚙ Configura conti paghe</a></p>
+<form method="post" action="{{ url_for('payroll.upload') }}" enctype="multipart/form-data" class="card"><label>Tipo <select name="document_kind"><option value="PAYSLIP">Buste paga Zucchetti</option><option value="F24">F24</option><option value="RATEI">Ratei/oneri differiti Zucchetti</option></select></label><label>PDF <input type="file" name="pdf_file" accept="application/pdf,.pdf" required></label><button class="btn" type="submit">Carica e revisiona</button></form>
+<h2>Import recenti</h2><table><tr><th>File</th><th>Tipo</th><th>Riferimento</th><th>Stato</th><th></th></tr>{% for r in imports %}<tr><td>{{r.filename}}</td><td>{{r.document_kind}}</td><td>{{r.document_reference or '—'}}</td><td>{{r.status}}</td><td>{% if r.status!='posted' %}<a href="{{url_for('payroll.review',import_id=r.id)}}">Rivedi</a>{% endif %}</td></tr>{% endfor %}</table>{% endblock %}
