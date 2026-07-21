@@ -1,8 +1,11 @@
+from datetime import datetime
+
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required
+from sqlalchemy import and_
 
 from extensions import db
-from models import CostCenter, JournalLine, Account
+from models import CostCenter, JournalEntry, JournalLine, Account
 
 costs_bp = Blueprint("costs", __name__, template_folder="../../templates/costs")
 
@@ -31,30 +34,74 @@ def cost_center_new():
     return redirect(url_for("costs.cost_centers"))
 
 
+def _parse_date(value, field_name):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError(f"{field_name}: usa il formato data valido.")
+
+
 @costs_bp.route("/report")
 @login_required
 def report():
-    """
-    Report costi in tempo reale: NON è una tabella separata riempita a
-    mano — sono le righe di Prima Nota (JournalLine) sui conti marcati
-    cost_relevant=True, aggregate per Centro di costo. Esattamente lo stesso
-    principio del vecchio "postFI" del prototipo browser: ogni scrittura
-    su un conto economico con un Centro di costo genera automaticamente
-    la vista costi, senza doppia registrazione.
-    """
-    lines = (JournalLine.query
-             .join(Account)
-             .filter(Account.cost_relevant == True)  # noqa: E712
-             .order_by(JournalLine.id.desc())
-             .limit(200)
-             .all())
+    """Report CO actual: righe FI su elementi di costo/ricavo, senza doppio ledger."""
+    centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
+    accounts = (Account.query.filter_by(active=True)
+                .filter(Account.cost_relevant == True)  # noqa: E712
+                .order_by(Account.code).all())
+    filters = {
+        "from_date": request.args.get("from_date", ""),
+        "to_date": request.args.get("to_date", ""),
+        "cost_center_id": request.args.get("cost_center_id", type=int),
+        "account_id": request.args.get("account_id", type=int),
+        "kind": request.args.get("kind", "COST").upper(),
+    }
+    if filters["kind"] not in ("COST", "REVENUE", "ALL"):
+        filters["kind"] = "COST"
+    try:
+        date_from = _parse_date(filters["from_date"], "Data da")
+        date_to = _parse_date(filters["to_date"], "Data a")
+        if date_from and date_to and date_from > date_to:
+            raise ValueError("La data iniziale non può essere successiva alla data finale.")
+    except ValueError as exc:
+        flash(str(exc), "danger")
+        date_from = date_to = None
 
-    by_center = {}
-    for l in lines:
-        key = l.cost_center.code if l.cost_center else "— Non Assegnato —"
-        by_center.setdefault(key, {"name": l.cost_center.name if l.cost_center else "Nessun Centro di costo", "total": 0, "lines": []})
-        amount = float(l.dare or 0) if l.account.cost_relevant_type == "COST" else float(l.avere or 0)
-        by_center[key]["total"] += amount
-        by_center[key]["lines"].append(l)
+    query = (JournalLine.query.join(Account).join(JournalEntry)
+             .filter(Account.cost_relevant == True))  # noqa: E712
+    if date_from:
+        query = query.filter(JournalEntry.doc_date >= date_from)
+    if date_to:
+        query = query.filter(JournalEntry.doc_date <= date_to)
+    if filters["cost_center_id"]:
+        query = query.filter(JournalLine.cost_center_id == filters["cost_center_id"])
+    if filters["account_id"]:
+        query = query.filter(JournalLine.account_id == filters["account_id"])
+    if filters["kind"] != "ALL":
+        query = query.filter(Account.cost_relevant_type == filters["kind"])
 
-    return render_template("costs/report.html", by_center=by_center, lines=lines)
+    lines = query.order_by(JournalEntry.doc_date.desc(), JournalLine.id.desc()).all()
+    by_center, by_element, grand_total = {}, {}, 0.0
+    for line in lines:
+        # Costi: Dare-Avere; ricavi: Avere-Dare. Gli storni riducono il totale CO.
+        amount = (float(line.dare or 0) - float(line.avere or 0)
+                  if line.account.cost_relevant_type == "COST"
+                  else float(line.avere or 0) - float(line.dare or 0))
+        cc_code = line.cost_center.code if line.cost_center else "— Non assegnato —"
+        cc_name = line.cost_center.name if line.cost_center else "Anomalia CO / storico senza oggetto"
+        by_center.setdefault(cc_code, {"name": cc_name, "total": 0.0, "lines": []})
+        by_center[cc_code]["total"] += amount
+        by_center[cc_code]["lines"].append((line, amount))
+        element_key = (cc_code, line.account.code)
+        by_element.setdefault(element_key, {
+            "cost_center": cc_code, "account": line.account,
+            "total": 0.0,
+        })["total"] += amount
+        grand_total += amount
+
+    return render_template("costs/report.html", by_center=by_center,
+                           by_element=sorted(by_element.values(), key=lambda x: (x["cost_center"], x["account"].code)),
+                           grand_total=grand_total, lines=lines, centers=centers,
+                           accounts=accounts, filters=filters)
