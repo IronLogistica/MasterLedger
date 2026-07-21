@@ -5,6 +5,7 @@ from flask_login import login_required, current_user
 from extensions import db
 from models import Account, CostCenter, JournalEntry
 from services.posting import post_journal_entry, reverse_journal_entry, UnbalancedEntryError
+from services.co import validate_co_assignment, COValidationError
 from services.ai_posting import suggerisci_scrittura, estrai_testo_pdf, AISuggestionError
 
 gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
@@ -61,11 +62,12 @@ def journal_entry():
             if not acc_id or not amt:
                 continue
             amount = float(amt.replace(",", "."))
+            account, center = validate_co_assignment(int(acc_id), int(cc) if cc else None)
             lines.append({
-                "account_id": int(acc_id),
+                "account_id": account.id,
                 "dare": amount if pk == "40" else 0,
                 "avere": amount if pk == "50" else 0,
-                "cost_center_id": int(cc) if cc else None,
+                "cost_center_id": center.id if center else None,
             })
 
         if len(lines) < 2:
@@ -81,7 +83,7 @@ def journal_entry():
             )
             flash(f"Documento {entry.doc_number} registrato correttamente in Prima Nota.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
-        except UnbalancedEntryError as e:
+        except (UnbalancedEntryError, COValidationError, ValueError) as e:
             flash(str(e), "danger")
 
     return render_template("gl/journal_entry.html", accounts=accounts, cost_centers=cost_centers)
