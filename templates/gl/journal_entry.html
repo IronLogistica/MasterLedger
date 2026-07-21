@@ -5,7 +5,7 @@
   <div class="card-body">
     <div class="info-box">
       Registrazione manuale sul General Ledger. Ogni riga va assegnata a Dare (40) o Avere (50).
-      Il documento viene accettato solo se <strong>Dare = Avere</strong> — nessuna scrittura sbilanciata viene mai salvata.
+      Il documento viene accettato solo se <strong>Dare = Avere</strong>. Per elementi di costo/ricavo CO il <strong>Centro di costo è obbligatorio</strong> — nessun costo effettivo resta non assegnato.
     </div>
 
     <div class="info-box" id="ai-box" style="background:#f4f0ff; border-color:#b39ddb;">
@@ -65,14 +65,14 @@
 
 <script>
 const ACCOUNTS = [
-  {% for a in accounts %}{ id: {{ a.id }}, code: "{{ a.code }}", name: "{{ a.name|e }}" },{% endfor %}
+  {% for a in accounts %}{ id: {{ a.id }}, code: "{{ a.code }}", name: "{{ a.name|e }}", costRelevant: {{ "true" if a.cost_relevant else "false" }} },{% endfor %}
 ];
 const COST_CENTERS = [
   {% for c in cost_centers %}{ id: {{ c.id }}, code: "{{ c.code }}", name: "{{ c.name|e }}" },{% endfor %}
 ];
 
 function accountOptions() {
-  return '<option value="">-- Conto --</option>' + ACCOUNTS.map(a => `<option value="${a.id}">${a.code} — ${a.name}</option>`).join('');
+  return '<option value="">-- Conto --</option>' + ACCOUNTS.map(a => `<option value="${a.id}">${a.code} — ${a.name}${a.costRelevant ? ' [CO]' : ''}</option>`).join('');
 }
 function costCenterOptions() {
   return '<option value="">--</option>' + COST_CENTERS.map(c => `<option value="${c.id}">${c.code}</option>`).join('');
@@ -82,16 +82,31 @@ function addLine() {
   const tbody = document.getElementById('lines-tbody');
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><select name="account_id[]" class="acct-sel">${accountOptions()}</select></td>
+    <td><select name="account_id[]" class="acct-sel" onchange="updateCOLabel(this)">${accountOptions()}</select></td>
     <td><select name="pk[]" class="pk-sel" onchange="recalc()">
           <option value="40">40 — Dare</option>
           <option value="50">50 — Avere</option>
         </select></td>
-    <td><select name="cost_center_id[]">${costCenterOptions()}</select></td>
+    <td><select name="cost_center_id[]" class="cc-sel">${costCenterOptions()}</select><small class="co-hint"></small></td>
     <td><input type="number" step="0.01" name="amount[]" class="amt-input" oninput="recalc()" style="width:110px; text-align:right;"></td>
     <td><span onclick="this.closest('tr').remove(); recalc();" style="cursor:pointer; color:var(--ml-red);">✕</span></td>
   `;
   tbody.appendChild(tr);
+}
+
+function updateCOLabel(accountSelect) {
+  const row = accountSelect.closest('tr');
+  const account = ACCOUNTS.find(a => String(a.id) === accountSelect.value);
+  const cc = row.querySelector('.cc-sel');
+  const hint = row.querySelector('.co-hint');
+  if (account && account.costRelevant) {
+    cc.required = true;
+    hint.textContent = ' CdC obbligatorio';
+    hint.style.color = 'var(--ml-red)';
+  } else {
+    cc.required = false;
+    hint.textContent = '';
+  }
 }
 
 function recalc() {
@@ -157,6 +172,7 @@ async function suggerisciAI() {
       addLine();
       const tr = document.getElementById('lines-tbody').lastElementChild;
       tr.querySelector('.acct-sel').value = line.account_id;
+      updateCOLabel(tr.querySelector('.acct-sel'));
       tr.querySelector('.pk-sel').value = line.pk;
       tr.querySelector('.amt-input').value = line.amount.toFixed(2);
     });
