@@ -1,37 +1,37 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card">
-  <div class="card-header"><span>📊</span> Report Costi — Costi in Arrivo per Centro di costo</div>
+  <div class="card-header"><span>📊</span> Controlling CO — Costi e ricavi effettivi</div>
   <div class="card-body">
     <div class="info-box">
-      Questo report <strong>non è una tabella separata</strong>: sono le righe di Prima Nota sui conti di Conto Economico
-      (marcati come "cost_relevant" nel Piano dei Conti), aggregate automaticamente per Centro di costo — esattamente
-      attraverso le regole contabili configurate.
+      Vista CO derivata direttamente dalla prima nota: ogni importo è registrato una sola volta in FI e analizzato qui per <strong>centro di costo</strong> ed <strong>elemento di costo</strong>. Le righe “Non assegnato” sono anomalie/storico da correggere, non vengono nascoste.
     </div>
+    <form method="GET" class="form-grid" style="align-items:end; margin:16px 0;">
+      <div class="form-group"><label>Dal</label><input type="date" name="from_date" value="{{ filters.from_date }}"></div>
+      <div class="form-group"><label>Al</label><input type="date" name="to_date" value="{{ filters.to_date }}"></div>
+      <div class="form-group"><label>Centro di costo</label><select name="cost_center_id"><option value="">Tutti</option>{% for cc in centers %}<option value="{{ cc.id }}" {% if filters.cost_center_id == cc.id %}selected{% endif %}>{{ cc.code }} — {{ cc.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label>Elemento di costo / ricavo</label><select name="account_id"><option value="">Tutti</option>{% for a in accounts %}<option value="{{ a.id }}" {% if filters.account_id == a.id %}selected{% endif %}>{{ a.code }} — {{ a.name }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label>Vista</label><select name="kind"><option value="COST" {% if filters.kind == 'COST' %}selected{% endif %}>Costi</option><option value="REVENUE" {% if filters.kind == 'REVENUE' %}selected{% endif %}>Ricavi</option><option value="ALL" {% if filters.kind == 'ALL' %}selected{% endif %}>Costi e ricavi</option></select></div>
+      <div class="form-group"><button type="submit" class="btn btn-primary">🔎 Aggiorna report</button></div>
+    </form>
+    <div style="font-size:18px; font-weight:700; margin:8px 0 18px;">Totale periodo: € {{ "%.2f"|format(grand_total) }}</div>
 
-    {% if by_center %}
-      {% for code, data in by_center.items() %}
-      <div style="margin-bottom:18px;">
-        <div style="font-weight:700; font-size:14px; margin-bottom:6px;">{{ code }} — {{ data.name }}
-          <span style="float:right; color:var(--ml-blue-dark);">Totale: € {{ "%.2f"|format(data.total) }}</span>
-        </div>
-        <table class="masterledger-table">
-          <thead><tr><th>Documento</th><th>Conto</th><th class="td-num">Importo</th></tr></thead>
-          <tbody>
-            {% for l in data.lines %}
-            <tr>
-              <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=l.entry_id) }}">{{ l.entry.doc_number }}</a></td>
-              <td>{{ l.account.code }} — {{ l.account.name }}</td>
-              <td class="td-num">{{ "%.2f"|format(l.dare or l.avere) }} €</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% endfor %}
-    {% else %}
-    <div class="empty-state">Nessun costo/ricavo ancora registrato sui conti di Conto Economico.</div>
-    {% endif %}
+    {% if by_element %}
+    <h3 style="margin-top:12px;">Riepilogo per centro ed elemento CO</h3>
+    <table class="masterledger-table">
+      <thead><tr><th>Centro di costo</th><th>Elemento CO</th><th class="td-num">Importo netto</th></tr></thead>
+      <tbody>{% for row in by_element %}<tr><td>{{ row.cost_center }}</td><td>{{ row.account.code }} — {{ row.account.name }}</td><td class="td-num">{{ "%.2f"|format(row.total) }} €</td></tr>{% endfor %}</tbody>
+    </table>
+
+    <h3 style="margin-top:24px;">Dettaglio documenti</h3>
+    {% for code, data in by_center.items() %}
+    <div style="margin:18px 0;">
+      <div style="font-weight:700; font-size:14px; margin-bottom:6px;">{{ code }} — {{ data.name }} <span style="float:right; color:var(--ml-blue-dark);">Totale: € {{ "%.2f"|format(data.total) }}</span></div>
+      <table class="masterledger-table"><thead><tr><th>Data</th><th>Documento</th><th>Elemento CO</th><th class="td-num">Importo netto</th></tr></thead><tbody>
+      {% for l, amount in data.lines %}<tr><td>{{ l.entry.doc_date.strftime('%d/%m/%Y') if l.entry.doc_date else '—' }}</td><td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=l.entry_id) }}">{{ l.entry.doc_number }}</a></td><td>{{ l.account.code }} — {{ l.account.name }}</td><td class="td-num">{{ "%.2f"|format(amount) }} €</td></tr>{% endfor %}
+      </tbody></table>
+    </div>{% endfor %}
+    {% else %}<div class="empty-state">Nessun movimento CO con i filtri selezionati.</div>{% endif %}
   </div>
 </div>
 {% endblock %}
