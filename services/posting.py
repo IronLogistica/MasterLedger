@@ -18,7 +18,7 @@ class UnbalancedEntryError(Exception):
 
 def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_module="LEDGER",
                         reference=None, created_by_id=None, economic_subject_id=None,
-                        gross_amount=None, vat_rate=None, natura=None):
+                        gross_amount=None, vat_rate=None, natura=None, commit=True):
     """
     Crea e salva un documento contabile in partita doppia.
 
@@ -26,8 +26,8 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
         {"account_id": int, "dare": Decimal|float, "avere": Decimal|float,
          "description": str (opz.), "cost_center_id": int|None (opz.)}
 
-    Solleva UnbalancedEntryError se Dare != Avere (nessuna scrittura a metà
-    viene mai salvata: o passa tutta, o niente — via rollback automatico).
+    Con ``commit=False`` l'operazione resta nella transazione chiamante, utile
+    per import o flussi composti. Solleva UnbalancedEntryError se Dare != Avere.
     """
     total_dare = sum(float(l.get("dare", 0) or 0) for l in lines)
     total_avere = sum(float(l.get("avere", 0) or 0) for l in lines)
@@ -66,7 +66,10 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
             cost_center_id=line.get("cost_center_id"),
         ))
 
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    else:
+        db.session.flush()
     return entry
 
 
