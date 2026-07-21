@@ -3,8 +3,9 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, EconomicSubject, JournalEntry
+from models import Account, CostCenter, EconomicSubject, JournalEntry
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.co import validate_co_assignment, COValidationError
 
 ap_bp = Blueprint("ap", __name__, template_folder="../../templates/ap")
 
@@ -22,6 +23,7 @@ def supplier_invoice():
     """Fattura fornitore — Registrazione Fattura Fornitore."""
     vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
     expense_accounts = Account.query.filter_by(account_type="costo", active=True).order_by(Account.code).all()
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
 
     if request.method == "POST":
         vendor_id = request.form.get("vendor_id", type=int)
@@ -31,21 +33,22 @@ def supplier_invoice():
         vat_rate = request.form.get("vat_rate", type=float) or 0
         expense_account_id = request.form.get("expense_account_id", type=int)
         description = request.form.get("description", "").strip()
+        cost_center_id = request.form.get("cost_center_id", type=int)
 
         vat = round(net * vat_rate / 100, 2)
         gross = net + vat
 
         if not vendor_id or not net or not expense_account_id:
             flash("Fornitore, imponibile e conto di costo sono obbligatori.", "danger")
-            return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts)
+            return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts, cost_centers=cost_centers)
 
         try:
             ap_account = _get_account_by_code("210000")   # Debiti v/Fornitori
             vat_account = _get_account_by_code("154000")  # IVA a Credito
-            expense_account = Account.query.get(expense_account_id)
+            expense_account, cost_center = validate_co_assignment(expense_account_id, cost_center_id)
 
             lines = [
-                {"account_id": expense_account.id, "dare": net, "avere": 0},
+                {"account_id": expense_account.id, "dare": net, "avere": 0, "cost_center_id": cost_center.id if cost_center else None},
                 {"account_id": vat_account.id, "dare": vat, "avere": 0},
                 {"account_id": ap_account.id, "dare": 0, "avere": gross},
             ]
@@ -59,10 +62,10 @@ def supplier_invoice():
             )
             flash(f"Fattura fornitore registrata: Doc. {entry.doc_number} — Totale {gross:.2f} €.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
-        except (UnbalancedEntryError, ValueError) as e:
+        except (UnbalancedEntryError, ValueError, COValidationError) as e:
             flash(str(e), "danger")
 
-    return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts)
+    return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts, cost_centers=cost_centers)
 
 
 @ap_bp.route("/supplier_invoice/import", methods=["GET", "POST"])
@@ -83,16 +86,19 @@ def supplier_invoice_import():
     from services.fatturapa_import import parse_fatturapa, FatturaImportError
 
     expense_accounts = Account.query.filter_by(account_type="costo", active=True).order_by(Account.code).all()
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
 
     # ── FASE 2: conferma e registrazione (dati già estratti, in hidden) ──
     if request.method == "POST" and request.form.get("phase") == "confirm":
         expense_account_id = request.form.get("expense_account_id", type=int)
+        cost_center_id = request.form.get("cost_center_id", type=int)
         if not expense_account_id:
             flash("Seleziona il conto di costo.", "danger")
             return redirect(url_for("ap.supplier_invoice_import"))
         try:
             ap_account = _get_account_by_code("210000")   # Debiti v/Fornitori
             vat_account = _get_account_by_code("154000")  # IVA a Credito
+            expense_account, cost_center = validate_co_assignment(expense_account_id, cost_center_id)
 
             piva = request.form.get("cedente_piva", "").strip()
             denominazione = request.form.get("cedente_denominazione", "").strip()
@@ -119,14 +125,14 @@ def supplier_invoice_import():
                 # Nota di credito fornitore: segni invertiti
                 lines = [
                     {"account_id": ap_account.id, "dare": gross, "avere": 0},
-                    {"account_id": Account.query.get(expense_account_id).id, "dare": 0, "avere": net},
+                    {"account_id": expense_account.id, "dare": 0, "avere": net, "cost_center_id": cost_center.id if cost_center else None},
                 ]
                 if vat:
                     lines.append({"account_id": vat_account.id, "dare": 0, "avere": vat})
                 label = "Nota Credito Fornitore"
             else:
                 lines = [
-                    {"account_id": Account.query.get(expense_account_id).id, "dare": net, "avere": 0},
+                    {"account_id": expense_account.id, "dare": net, "avere": 0, "cost_center_id": cost_center.id if cost_center else None},
                 ]
                 if vat:
                     lines.append({"account_id": vat_account.id, "dare": vat, "avere": 0})
@@ -144,7 +150,7 @@ def supplier_invoice_import():
             flash(f"{label} importata da XML: Doc. {entry.doc_number} — "
                   f"{denominazione}, n. {numero}, totale {gross:.2f} €.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
-        except (UnbalancedEntryError, ValueError) as e:
+        except (UnbalancedEntryError, ValueError, COValidationError) as e:
             db.session.rollback()
             flash(str(e), "danger")
             return redirect(url_for("ap.supplier_invoice_import"))
@@ -155,13 +161,13 @@ def supplier_invoice_import():
         if not file or not file.filename:
             flash("Seleziona un file .xml o .xml.p7m.", "warning")
             return render_template("ap/supplier_invoice_import.html", parsed=None,
-                                   expense_accounts=expense_accounts)
+                                   expense_accounts=expense_accounts, cost_centers=cost_centers)
         try:
             parsed = parse_fatturapa(file.read(), filename=file.filename)
         except FatturaImportError as e:
             flash(str(e), "danger")
             return render_template("ap/supplier_invoice_import.html", parsed=None,
-                                   expense_accounts=expense_accounts)
+                                   expense_accounts=expense_accounts, cost_centers=cost_centers)
 
         if parsed["multi_body"]:
             flash("Attenzione: il file contiene un LOTTO di più fatture. "
@@ -171,15 +177,15 @@ def supplier_invoice_import():
                   "(documenti di integrazione/autofattura TD16-TD29 richiedono una "
                   "registrazione manuale con reverse charge).", "danger")
             return render_template("ap/supplier_invoice_import.html", parsed=None,
-                                   expense_accounts=expense_accounts)
+                                   expense_accounts=expense_accounts, cost_centers=cost_centers)
 
         vendor_match = EconomicSubject.query.filter_by(piva=parsed["cedente_piva"]).first() if parsed["cedente_piva"] else None
         return render_template("ap/supplier_invoice_import.html", parsed=parsed,
                                vendor_match=vendor_match,
-                               expense_accounts=expense_accounts)
+                               expense_accounts=expense_accounts, cost_centers=cost_centers)
 
     return render_template("ap/supplier_invoice_import.html", parsed=None,
-                           expense_accounts=expense_accounts)
+                           expense_accounts=expense_accounts, cost_centers=cost_centers)
 
 
 @ap_bp.route("/supplier_payment", methods=["GET", "POST"])
