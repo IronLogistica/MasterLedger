@@ -60,6 +60,14 @@
           {% for a in expense_accounts %}<option value="{{ a.id }}">{{ a.code }} — {{ a.name }}</option>{% endfor %}
         </select>
       </div>
+      <div class="form-group" style="max-width:480px;">
+        <label>Centro di costo CO <span class="req">*</span></label>
+        <select name="cost_center_id" required>
+          <option value="">-- Seleziona --</option>
+          {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+        </select>
+        <small>Il costo importato sarà rilevato nel report CO su questo centro.</small>
+      </div>
       <div class="btn-row">
         <button type="submit" class="btn btn-success">✅ Registra in Prima Nota</button>
         <a href="{{ url_for('ap.supplier_invoice_import') }}" class="btn">↺ Carica un altro file</a>
