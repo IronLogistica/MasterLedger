@@ -17,7 +17,7 @@ costo entri a magazzino al ricevimento merci, e che il debito verso il
 fornitore nasca solo alla verifica fattura — mai doppie registrazioni.
 """
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from flask import Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_required, current_user
@@ -300,3 +300,65 @@ def invoice_verification():
 
     return render_template("mm/invoice_verification.html", pos=pos,
                            tolerance=float(PRICE_TOLERANCE_PCT))
+
+# ══════════════════════════════════════════════════════════════
+# RFQ — richiesta d'offerta → confronto → flag selezione → OA
+# ══════════════════════════════════════════════════════════════
+@mm_bp.route('/rfq', methods=['GET', 'POST'])
+@login_required
+def rfqs():
+    from models import RequestForQuotation, SupplierQuotation, DocumentSequence
+    vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
+    materials = Material.query.filter_by(active=True).order_by(Material.code).all()
+    if request.method == 'POST':
+        try:
+            mat = Material.query.get(request.form.get('material_id', type=int))
+            qty = Decimal(str(request.form.get('qty', '0')).replace(',', '.'))
+            if not mat or qty <= 0: raise ValueError('Seleziona un articolo e una quantità positiva.')
+            required = request.form.get('required_date')
+            rfq = RequestForQuotation(rfq_number=DocumentSequence.next_number('RFQ','35'), material_id=mat.id, qty=qty,
+                required_date=datetime.strptime(required,'%Y-%m-%d').date() if required else None,
+                notes=request.form.get('notes','').strip(), created_by_id=current_user.id)
+            db.session.add(rfq); db.session.commit(); flash(f'Richiesta d’offerta {rfq.rfq_number} creata. Inserisci e confronta le offerte fornitori.', 'success')
+        except (ValueError, InvalidOperation) as e:
+            db.session.rollback(); flash(str(e),'danger')
+        return redirect(url_for('mm.rfqs'))
+    return render_template('mm/rfqs.html', rfqs=RequestForQuotation.query.order_by(RequestForQuotation.id.desc()).all(), vendors=vendors, materials=materials)
+
+@mm_bp.route('/rfq/<int:rfq_id>/offerta', methods=['POST'])
+@login_required
+def rfq_offer(rfq_id):
+    from models import RequestForQuotation, SupplierQuotation
+    r = RequestForQuotation.query.get_or_404(rfq_id)
+    try:
+        vendor = EconomicSubject.query.get(request.form.get('vendor_id',type=int)); price=Decimal(str(request.form.get('unit_price','0')).replace(',','.'))
+        if not vendor or price < 0: raise ValueError('Fornitore e prezzo non negativo sono obbligatori.')
+        valid=request.form.get('valid_until')
+        db.session.add(SupplierQuotation(rfq_id=r.id,economic_subject_id=vendor.id,offer_ref=request.form.get('offer_ref','').strip(),unit_price=price,
+            lead_days=request.form.get('lead_days',type=int),valid_until=datetime.strptime(valid,'%Y-%m-%d').date() if valid else None))
+        db.session.commit(); flash('Offerta fornitore registrata.', 'success')
+    except (ValueError,InvalidOperation) as e: db.session.rollback(); flash(str(e),'danger')
+    return redirect(url_for('mm.rfqs'))
+
+@mm_bp.route('/rfq/offerta/<int:offer_id>/seleziona', methods=['POST'])
+@login_required
+def rfq_select(offer_id):
+    from models import SupplierQuotation
+    offer=SupplierQuotation.query.get_or_404(offer_id); r=offer.rfq
+    if r.status == 'ordinata': flash('RFQ già convertita in ordine: non è più modificabile.','warning'); return redirect(url_for('mm.rfqs'))
+    for other in r.offers: other.selected=False
+    offer.selected=True; r.status='aggiudicata'; db.session.commit(); flash(f'Offerta {offer.supplier.name} selezionata: pronta per l’ordine.', 'success')
+    return redirect(url_for('mm.rfqs'))
+
+@mm_bp.route('/rfq/offerta/<int:offer_id>/ordine', methods=['POST'])
+@login_required
+def rfq_to_po(offer_id):
+    from models import SupplierQuotation, PurchaseOrder, PurchaseOrderLine, DocumentSequence
+    offer=SupplierQuotation.query.get_or_404(offer_id); r=offer.rfq
+    if not offer.selected: flash('Prima seleziona l’offerta con il flag di aggiudicazione.','danger'); return redirect(url_for('mm.rfqs'))
+    if offer.purchase_order_id: flash('Questa offerta è già stata convertita in ordine.','warning'); return redirect(url_for('mm.rfqs'))
+    po=PurchaseOrder(doc_number=DocumentSequence.next_number('OA','33'),economic_subject_id=offer.economic_subject_id,
+      note=f'Da RFQ {r.rfq_number}; offerta {offer.offer_ref or "s.n."}',created_by_id=current_user.id)
+    db.session.add(po); db.session.flush(); db.session.add(PurchaseOrderLine(po_id=po.id,material_id=r.material_id,qty=r.qty,price=offer.unit_price))
+    offer.purchase_order_id=po.id; r.status='ordinata'; db.session.commit(); flash(f'Ordine {po.doc_number} creato dall’offerta selezionata. Pronto per Entrata Merci (MIGO).','success')
+    return redirect(url_for('mm.purchase_orders'))
