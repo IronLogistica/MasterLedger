@@ -1,12 +1,12 @@
 """Commesse WIP e RFQ fornitori.
-Revision ID: 5f6a7b8c9d0e
-Revises: 4e5f6a7b8c9d
+Revision ID: 6g7h8i9j0k1l
+Revises: 5f6a7b8c9d0e
 """
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect
-revision='5f6a7b8c9d0e'
-down_revision='4e5f6a7b8c9d'
+revision='6g7h8i9j0k1l'
+down_revision='5f6a7b8c9d0e'
 branch_labels=None
 depends_on=None
 
