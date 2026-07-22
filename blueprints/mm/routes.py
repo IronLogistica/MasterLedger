@@ -307,7 +307,8 @@ def invoice_verification():
 @mm_bp.route('/rfq', methods=['GET', 'POST'])
 @login_required
 def rfqs():
-    from models import RequestForQuotation, SupplierQuotation, DocumentSequence
+    from models import RequestForQuotation, DocumentSequence
+    from services.logistic_client import get_fabbisogni_acquisto, LogisticError
     vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
     materials = Material.query.filter_by(active=True).order_by(Material.code).all()
     if request.method == 'POST':
@@ -319,11 +320,73 @@ def rfqs():
             rfq = RequestForQuotation(rfq_number=DocumentSequence.next_number('RFQ','35'), material_id=mat.id, qty=qty,
                 required_date=datetime.strptime(required,'%Y-%m-%d').date() if required else None,
                 notes=request.form.get('notes','').strip(), created_by_id=current_user.id)
-            db.session.add(rfq); db.session.commit(); flash(f'Richiesta d’offerta {rfq.rfq_number} creata. Inserisci e confronta le offerte fornitori.', 'success')
+            db.session.add(rfq); db.session.commit(); flash(f'Richiesta d’offerta {rfq.rfq_number} creata.', 'success')
         except (ValueError, InvalidOperation) as e:
             db.session.rollback(); flash(str(e),'danger')
         return redirect(url_for('mm.rfqs'))
-    return render_template('mm/rfqs.html', rfqs=RequestForQuotation.query.order_by(RequestForQuotation.id.desc()).all(), vendors=vendors, materials=materials)
+    wms_error = None
+    try:
+        wms_needs = get_fabbisogni_acquisto()
+    except LogisticError as exc:
+        wms_needs, wms_error = [], str(exc)
+    material_by_code = {m.code.strip().upper(): m for m in materials}
+    for row in wms_needs:
+        row['material'] = material_by_code.get(str(row['sku']).strip().upper())
+    return render_template('mm/rfqs.html', rfqs=RequestForQuotation.query.order_by(RequestForQuotation.id.desc()).all(),
+                           vendors=vendors, materials=materials, wms_needs=wms_needs, wms_error=wms_error)
+
+@mm_bp.route('/rfq/da-fabbisogni', methods=['POST'])
+@login_required
+def rfq_from_wms_needs():
+    """Crea RFQ dai fabbisogni correnti WMS e le inoltra ai fornitori selezionati."""
+    from models import RequestForQuotation, RfqDelivery, DocumentSequence
+    from services.logistic_client import get_fabbisogni_acquisto, LogisticError
+    from services.rfq_delivery import send_rfq_email, RfqDeliveryError
+    vendor_ids = request.form.getlist('vendor_ids', type=int)
+    requested = request.form.getlist('sku')
+    quantities = request.form
+    if not requested:
+        flash('Seleziona almeno un fabbisogno WMS.', 'danger'); return redirect(url_for('mm.rfqs'))
+    if not vendor_ids:
+        flash('Seleziona almeno un fornitore destinatario.', 'danger'); return redirect(url_for('mm.rfqs'))
+    vendors = EconomicSubject.query.filter(EconomicSubject.id.in_(vendor_ids), EconomicSubject.active.is_(True), EconomicSubject.is_supplier.is_(True)).all()
+    if not vendors:
+        flash('I fornitori selezionati non sono validi.', 'danger'); return redirect(url_for('mm.rfqs'))
+    try:
+        current = {str(x['sku']): x for x in get_fabbisogni_acquisto()}
+    except LogisticError as exc:
+        flash(str(exc), 'danger'); return redirect(url_for('mm.rfqs'))
+    materials = {m.code.strip().upper(): m for m in Material.query.filter_by(active=True).all()}
+    created, sent, failed, skipped = [], 0, [], []
+    try:
+        for sku in requested:
+            row = current.get(sku)
+            mat = materials.get(str(sku).strip().upper())
+            if not row or not mat:
+                skipped.append(sku); continue
+            qty = Decimal(str(quantities.get('qty_' + sku, row['fabbisogno_netto'])).replace(',', '.'))
+            if qty <= 0: continue
+            rfq = RequestForQuotation(rfq_number=DocumentSequence.next_number('RFQ','35'), material_id=mat.id, qty=qty,
+                notes=f'Generata dal fabbisogno WMS: disponibilità {row.get("dispo_netta", 0)}, scorta minima {row.get("scorta_minima", 0)}.',
+                created_by_id=current_user.id)
+            db.session.add(rfq); db.session.flush(); created.append(rfq)
+            successful = False
+            for vendor in vendors:
+                try:
+                    recipient = send_rfq_email(rfq, vendor)
+                    db.session.add(RfqDelivery(rfq_id=rfq.id, economic_subject_id=vendor.id, recipient_email=recipient, status='inviata', sent_by_id=current_user.id))
+                    sent += 1; successful = True
+                except RfqDeliveryError as exc:
+                    db.session.add(RfqDelivery(rfq_id=rfq.id, economic_subject_id=vendor.id, recipient_email=(vendor.email or vendor.pec or ''), status='errore', error_message=str(exc)[:500], sent_by_id=current_user.id))
+                    failed.append(f'{rfq.rfq_number}/{vendor.name}')
+            rfq.status = 'inviata' if successful else 'da_inviare'
+        db.session.commit()
+    except (InvalidOperation, ValueError) as exc:
+        db.session.rollback(); flash(f'RFQ non create: {exc}', 'danger'); return redirect(url_for('mm.rfqs'))
+    if created: flash(f'Create {len(created)} RFQ dal fabbisogno WMS; inoltri riusciti: {sent}.', 'success')
+    if skipped: flash('Articoli WMS senza anagrafica MasterLedger: ' + ', '.join(skipped), 'warning')
+    if failed: flash('Inoltro da riesaminare: ' + ', '.join(failed), 'warning')
+    return redirect(url_for('mm.rfqs'))
 
 @mm_bp.route('/rfq/<int:rfq_id>/offerta', methods=['POST'])
 @login_required
