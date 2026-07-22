@@ -143,3 +143,21 @@ def sposta_stock(sku, delta, timeout=8):
             f"disponibili {attuale.get('stock', 0)}, richiesti {abs(delta)}."
         )
     return _rettifica_stock_assoluto(sku, nuovo_stock, timeout=timeout)
+
+
+def get_fabbisogni_acquisto(timeout=8):
+    """Ritorna solo i materiali WMS con fabbisogno di acquisto positivo."""
+    magazzino = get_magazzino(timeout=timeout)
+    if not isinstance(magazzino, dict):
+        raise LogisticError("Risposta magazzino WMS non valida.")
+    needs = []
+    for sku, row in magazzino.items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            qty = float(row.get("fabbisogno_netto", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty > 0:
+            needs.append({"sku": sku, **row, "fabbisogno_netto": qty})
+    return sorted(needs, key=lambda r: (r.get("stato_scorta") != "esaurito", r["sku"]))
