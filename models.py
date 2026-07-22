@@ -934,6 +934,22 @@ class RequestForQuotation(db.Model):
     offers = db.relationship("SupplierQuotation", backref="rfq", cascade="all, delete-orphan")
 
 
+class RfqDelivery(db.Model):
+    """Traccia ogni inoltro di una RFQ a un fornitore selezionato."""
+    __tablename__ = "rfq_deliveries"
+    id = db.Column(db.Integer, primary_key=True)
+    rfq_id = db.Column(db.Integer, db.ForeignKey("requests_for_quotation.id"), nullable=False, index=True)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
+    recipient_email = db.Column(db.String(120), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="inviata")  # inviata|errore
+    error_message = db.Column(db.String(500))
+    sent_at = db.Column(db.DateTime, default=datetime.utcnow)
+    sent_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    rfq = db.relationship("RequestForQuotation", backref=db.backref("deliveries", cascade="all, delete-orphan"))
+    supplier = db.relationship("EconomicSubject")
+    sent_by = db.relationship("User")
+
+
 class SupplierQuotation(db.Model):
     __tablename__ = "supplier_quotations"
     id = db.Column(db.Integer, primary_key=True)

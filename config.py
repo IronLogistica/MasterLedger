@@ -40,3 +40,12 @@ class Config:
     # Se assente, tutte le operazioni che leggono/scrivono giacenza restano bloccate
     # con un errore chiaro invece di proseguire silenziosamente con dati sbagliati.
     MASTERLOGISTIC_URL = os.environ.get("MASTERLOGISTIC_URL", "").rstrip("/")
+
+    # Canale di inoltro RFQ: configura questi valori nell'ambiente di produzione.
+    RFQ_SMTP_HOST = os.environ.get("RFQ_SMTP_HOST", "")
+    RFQ_SMTP_PORT = int(os.environ.get("RFQ_SMTP_PORT", "587"))
+    RFQ_SMTP_USERNAME = os.environ.get("RFQ_SMTP_USERNAME", "")
+    RFQ_SMTP_PASSWORD = os.environ.get("RFQ_SMTP_PASSWORD", "")
+    RFQ_SMTP_USE_TLS = os.environ.get("RFQ_SMTP_USE_TLS", "true").lower() in ("1", "true", "yes")
+    RFQ_FROM_EMAIL = os.environ.get("RFQ_FROM_EMAIL", "")
+    RFQ_FROM_NAME = os.environ.get("RFQ_FROM_NAME", COMPANY_NAME)
