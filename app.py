@@ -50,6 +50,7 @@ def create_app(config_class=Config):
     from blueprints.materials.routes import materials_bp
     from blueprints.parties.routes import parties_bp
     from blueprints.payroll.routes import payroll_bp
+    from blueprints.operations.routes import operations_bp
 
     app.register_blueprint(auth_bp, url_prefix="/auth")
     app.register_blueprint(dashboard_bp, url_prefix="/")
@@ -65,6 +66,7 @@ def create_app(config_class=Config):
     app.register_blueprint(materials_bp, url_prefix="/materials")
     app.register_blueprint(parties_bp, url_prefix="/soggetti-economici")
     app.register_blueprint(payroll_bp, url_prefix="/paghe")
+    app.register_blueprint(operations_bp, url_prefix="/produzione-operativa")
 
     # ── Variabili disponibili in ogni template ──────────────────
     @app.context_processor

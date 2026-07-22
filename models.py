@@ -858,3 +858,93 @@ class AllocationSplit(db.Model):
     percentage = db.Column(db.Numeric(5, 2), nullable=False)
     cost_center = db.relationship("CostCenter")
     __table_args__ = (db.UniqueConstraint("document_type", "document_id", "document_line_id", "cost_center_id", name="uq_allocation_split_target_center"),)
+
+# ══════════════════════════════════════════════════════════════
+# COMMESSE DI PRODUZIONE / WIP — ordine, prelievi e versamento PF
+# ══════════════════════════════════════════════════════════════
+class ProductionOrder(db.Model):
+    """Commessa/ordine di produzione. L'apertura non genera movimenti FI;
+    i movimenti nascono dai consuntivi: prelievo, assorbimento e versamento PF."""
+    __tablename__ = "production_orders"
+    id = db.Column(db.Integer, primary_key=True)
+    order_number = db.Column(db.String(30), unique=True, nullable=False)
+    order_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty_planned = db.Column(db.Numeric(14, 3), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="rilasciata")  # rilasciata|in_lavorazione|completata
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=True)
+    notes = db.Column(db.String(300))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    material = db.relationship("Material")
+    cost_center = db.relationship("CostCenter")
+    issues = db.relationship("ProductionMaterialIssue", backref="production_order", cascade="all, delete-orphan")
+    absorptions = db.relationship("ProductionCostAbsorption", backref="production_order", cascade="all, delete-orphan")
+
+    @property
+    def actual_wip(self):
+        return sum((i.total_cost for i in self.issues), Decimal("0")) + sum((a.amount for a in self.absorptions), Decimal("0"))
+
+
+class ProductionMaterialIssue(db.Model):
+    """Prelievo componenti alla commessa: Dare WIP / Avere magazzino componente."""
+    __tablename__ = "production_material_issues"
+    id = db.Column(db.Integer, primary_key=True)
+    production_order_id = db.Column(db.Integer, db.ForeignKey("production_orders.id"), nullable=False)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    unit_cost = db.Column(db.Numeric(14, 4), nullable=False)
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
+    issue_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    material = db.relationship("Material")
+    journal_entry = db.relationship("JournalEntry")
+    @property
+    def total_cost(self): return Decimal(str(self.qty)) * Decimal(str(self.unit_cost))
+
+
+class ProductionCostAbsorption(db.Model):
+    """MOD o overhead assorbito: Dare WIP / Avere conto di assorbimento."""
+    __tablename__ = "production_cost_absorptions"
+    id = db.Column(db.Integer, primary_key=True)
+    production_order_id = db.Column(db.Integer, db.ForeignKey("production_orders.id"), nullable=False)
+    cost_type = db.Column(db.String(15), nullable=False)  # MOD | OVERHEAD
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
+    posting_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    notes = db.Column(db.String(255))
+    journal_entry = db.relationship("JournalEntry")
+
+
+# ══════════════════════════════════════════════════════════════
+# RFQ MM — richiesta d'offerta, confronto, scelta e conversione in OA
+# ══════════════════════════════════════════════════════════════
+class RequestForQuotation(db.Model):
+    __tablename__ = "requests_for_quotation"
+    id = db.Column(db.Integer, primary_key=True)
+    rfq_number = db.Column(db.String(30), unique=True, nullable=False)
+    request_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    required_date = db.Column(db.Date, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="aperta")  # aperta|aggiudicata|ordinata
+    notes = db.Column(db.String(300))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    material = db.relationship("Material")
+    offers = db.relationship("SupplierQuotation", backref="rfq", cascade="all, delete-orphan")
+
+
+class SupplierQuotation(db.Model):
+    __tablename__ = "supplier_quotations"
+    id = db.Column(db.Integer, primary_key=True)
+    rfq_id = db.Column(db.Integer, db.ForeignKey("requests_for_quotation.id"), nullable=False)
+    economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=False)
+    offer_ref = db.Column(db.String(60))
+    unit_price = db.Column(db.Numeric(14, 4), nullable=False)
+    lead_days = db.Column(db.Integer, nullable=True)
+    valid_until = db.Column(db.Date, nullable=True)
+    selected = db.Column(db.Boolean, nullable=False, default=False)
+    purchase_order_id = db.Column(db.Integer, db.ForeignKey("purchase_orders.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    supplier = db.relationship("EconomicSubject")
+    purchase_order = db.relationship("PurchaseOrder")
