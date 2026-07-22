@@ -322,13 +322,19 @@ def costo_standard():
             flash("Prodotto, anno e mese sono obbligatori.", "danger")
             return redirect(url_for("production.costo_standard"))
 
-        db.session.add(StandardCost(
+        standard = StandardCost(
             material_id=material_id, year=anno, month=mese,
             standard_material_cost=mat_cost, standard_labor_cost=lab_cost, standard_overhead_cost=oh_cost,
             notes=request.form.get("notes", "").strip(), created_by_id=current_user.id,
-        ))
+        )
+        db.session.add(standard)
+        # Lo stesso standard unitario è quello che SD userà al PGI/DDT per
+        # Dare COGS / Avere PF. Così COGM e COGS restano riconciliati.
+        material = Material.query.get(material_id)
+        if material is not None:
+            material.standard_cost = mat_cost + lab_cost + oh_cost
         db.session.commit()
-        flash("Costo Standard salvato.", "success")
+        flash("Costo Standard salvato e allineato al costo standard usato dal PGI/DDT.", "success")
         return redirect(url_for("production.costo_standard"))
 
     tutti = StandardCost.query.order_by(StandardCost.year.desc(), StandardCost.month.desc(),
