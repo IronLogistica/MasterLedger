@@ -53,6 +53,16 @@ ACCOUNTS = [
     ("461000", "Varianza Materiali (Produzione)",               "costo",                 True,  "COST"),
     ("462000", "Varianza Manodopera (Produzione)",              "costo",                 True,  "COST"),
     ("463000", "Varianza Overhead (Produzione)",                "costo",                 True,  "COST"),
+    # I 4 conti seguenti esistevano già nel DB (inseriti dalla migrazione
+    # 6g7h8i9j0k1l_commesse_wip_rfq.py con INSERT diretto, non da questo
+    # seed) — li esplicito anche qui perché seed.py resti la fonte di
+    # verità COMPLETA del piano dei conti: sono quelli che reggono il ciclo
+    # MIGO (Entrata Merci)/MIRO (Verifica Fattura) e il costo standard con
+    # varianze di produzione (vedi blueprints/mm, blueprints/operations).
+    ("157000", "Produzione in Corso (WIP)",                     "patrimoniale_attivo",  False, None),
+    ("464000", "Varianza di Produzione",                         "costo",                True,  "COST"),
+    ("472000", "Manodopera Diretta Assorbita",                   "ricavo",                True,  "REVENUE"),
+    ("473000", "Overhead Industriali Assorbiti",                 "ricavo",                True,  "REVENUE"),
 
     # ── Estensione piano dei conti "standard IRON APPALTI" ──────────
     # Aggiunta a supporto di: 1) Prima Nota manuale/AI per i documenti
