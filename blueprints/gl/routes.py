@@ -3,12 +3,32 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, CostCenter, JournalEntry
+from models import Account, CostCenter, JournalEntry, EconomicSubject
 from services.posting import post_journal_entry, reverse_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
 from services.ai_posting import suggerisci_scrittura, estrai_testo_pdf, AISuggestionError
 
 gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
+
+# Etichette leggibili per i doc_type — usate sia nel filtro del Giornale sia
+# nel riepilogo per tipo documento (la "prova" che tutto quello che passa da
+# SD/MM/Paghe/Cespiti sia effettivamente arrivato in Prima Nota).
+DOC_TYPE_LABELS = {
+    "SA": "Prima Nota manuale",
+    "KR": "Fattura Fornitore (AP)",
+    "DR": "Fattura Cliente (AR)",
+    "KZ": "Pagamento",
+    "DZ": "Incasso",
+    "Cespiti": "Capitalizzazione Cespite",
+    "AF": "Ammortamento",
+    "QT": "Preventivo",
+    "OR": "Ordine Cliente",
+    "DL": "DDT / Uscita Merci",
+    "OA": "Ordine d'Acquisto",
+    "GR": "Entrata Merci",
+    "RFQ": "Richiesta d'Offerta",
+    "PG": "Paghe (accantonamento/F24/pagamento)",
+}
 
 
 @gl_bp.route("/")
@@ -16,12 +36,90 @@ gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
 def journal_list():
     """Il 'Giornale' — lista cronologica di TUTTI i documenti (equivalente del
     vecchio 'Giornale Integrato' del simulatore, qui però è il vero libro
-    giornale con numerazione progressiva reale)."""
+    giornale con numerazione progressiva reale).
+
+    Filtrabile per tipo documento, modulo di provenienza, controparte e stato
+    — è il posto dove verificare che TUTTO quello che esce da SD (Fatturazione
+    DDT → doc_type DR), da MM (Verifica Fattura → doc_type KR) o da Paghe
+    (doc_type PG) sia effettivamente arrivato in Prima Nota, e cosa resta
+    ancora aperto/da pagare.
+    """
     page = request.args.get("page", 1, type=int)
-    entries = (JournalEntry.query
-               .order_by(JournalEntry.created_at.desc())
-               .paginate(page=page, per_page=25, error_out=False))
-    return render_template("gl/journal_list.html", entries=entries)
+    doc_type = request.args.get("doc_type") or None
+    source_module = request.args.get("source_module") or None
+    party_id = request.args.get("party_id", type=int)
+    status = request.args.get("status") or None  # aperto | pagato | stornato
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
+
+    query = JournalEntry.query
+    if doc_type:
+        query = query.filter(JournalEntry.doc_type == doc_type)
+    if source_module:
+        query = query.filter(JournalEntry.source_module == source_module)
+    if party_id:
+        query = query.filter(JournalEntry.economic_subject_id == party_id)
+    if status == "aperto":
+        query = query.filter(JournalEntry.is_paid.is_(False), JournalEntry.is_reversed.is_(False))
+    elif status == "pagato":
+        query = query.filter(JournalEntry.is_paid.is_(True))
+    elif status == "stornato":
+        query = query.filter(JournalEntry.is_reversed.is_(True))
+    if date_from:
+        try:
+            query = query.filter(JournalEntry.doc_date >= datetime.strptime(date_from, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            query = query.filter(JournalEntry.doc_date <= datetime.strptime(date_to, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+
+    entries = query.order_by(JournalEntry.created_at.desc()).paginate(page=page, per_page=25, error_out=False)
+
+    # Riepilogo per tipo documento — SEMPRE sul totale (non filtrato), è la
+    # "prova del nove": qui vedi in un colpo d'occhio quante DR/KR/PG/... sono
+    # arrivate in Prima Nota, da confrontare con quante fatture/DDT/buste
+    # risultano emesse/ricevute nei rispettivi moduli (SD/MM/Paghe).
+    counts_raw = (db.session.query(JournalEntry.doc_type, db.func.count(JournalEntry.id))
+                  .group_by(JournalEntry.doc_type).all())
+    doc_type_summary = sorted(
+        ({"doc_type": t, "label": DOC_TYPE_LABELS.get(t, t), "count": c} for t, c in counts_raw),
+        key=lambda r: -r["count"])
+
+    all_doc_types = [t for t, in db.session.query(JournalEntry.doc_type).distinct().order_by(JournalEntry.doc_type)]
+    all_modules = [m for m, in db.session.query(JournalEntry.source_module).distinct().order_by(JournalEntry.source_module)]
+    parties = EconomicSubject.query.order_by(EconomicSubject.name).all()
+
+    return render_template("gl/journal_list.html", entries=entries, doc_type_summary=doc_type_summary,
+                           doc_type_labels=DOC_TYPE_LABELS, all_doc_types=all_doc_types,
+                           all_modules=all_modules, parties=parties,
+                           filters={"doc_type": doc_type, "source_module": source_module,
+                                    "party_id": party_id, "status": status,
+                                    "date_from": date_from, "date_to": date_to},
+                           pager_args={k: v for k, v in {
+                               "doc_type": doc_type, "source_module": source_module,
+                               "party_id": party_id, "status": status,
+                               "date_from": date_from, "date_to": date_to}.items() if v})
+
+
+@gl_bp.route("/piano-conti")
+@login_required
+def piano_conti():
+    """Piano dei Conti — elenco completo (attivi e non) per verificare a colpo
+    d'occhio cosa esiste davvero nel database, senza doverlo dedurre dal
+    menu a tendina della Prima Nota."""
+    accounts = Account.query.order_by(Account.account_type, Account.code).all()
+    gruppi = {}
+    for a in accounts:
+        gruppi.setdefault(a.account_type, []).append(a)
+    ordine_tipi = ["patrimoniale_attivo", "patrimoniale_passivo", "costo", "ricavo"]
+    etichette_tipo = {"patrimoniale_attivo": "Stato Patrimoniale — Attivo",
+                       "patrimoniale_passivo": "Stato Patrimoniale — Passivo",
+                       "costo": "Conto Economico — Costi", "ricavo": "Conto Economico — Ricavi"}
+    return render_template("gl/piano_conti.html", gruppi=gruppi, ordine_tipi=ordine_tipi,
+                           etichette_tipo=etichette_tipo, totale=len(accounts))
 
 
 @gl_bp.route("/entry/<int:entry_id>")
