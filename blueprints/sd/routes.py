@@ -304,7 +304,21 @@ def billing():
         try:
             ar_acc = _acc("140000")
             vat_acc = _acc("170000")
-            rev_acc = _acc("4000")
+            # Conto ricavi scelto in base al canale del cliente: 'subappalto'
+            # (lavori per conto di un appaltatore principale) → 4000,
+            # 'affidamento_diretto' (grande committente senza intermediari)
+            # → 4001. Se il cliente non è ancora qualificato, si ricade sul
+            # conto storico 4000 e lo si segnala all'utente, così se ne accorge
+            # e può classificare l'anagrafica (Soggetti Economici).
+            channel = d.party.revenue_channel if d.party else None
+            if channel == "affidamento_diretto":
+                rev_acc = _acc("4001")
+            else:
+                rev_acc = _acc("4000")
+                if channel is None:
+                    flash(f"Cliente {d.party.name if d.party else ''} senza canale ricavo qualificato: "
+                          f"fatturato su 4000 (Subappalto) di default. Imposta il canale in Soggetti Economici "
+                          f"se si tratta invece di un affidamento diretto.", "warning")
 
             total_net = Decimal("0")
             total_vat = Decimal("0")
