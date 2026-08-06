@@ -3,9 +3,11 @@ from decimal import Decimal, InvalidOperation
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 from extensions import db
-from models import Account, CostCenter, PayrollAccountConfig, PayrollEmployeeMapping, PayrollImport, F24ImuMapping, PayrollEmployeeAllocation
+from models import (Account, CostCenter, PayrollAccountConfig, PayrollEmployeeMapping, PayrollImport,
+                     F24ImuMapping, PayrollEmployeeAllocation, JournalEntry, JournalLine)
 from services.payroll import (parse_payslips, parse_f24, fingerprint, PayrollParseError,
                               post_import, posted_payslip_allocations, parse_ratei, validate_percent_splits, mapping_splits, approved_payslip_splits)
+from services.posting import post_journal_entry, UnbalancedEntryError
 payroll_bp=Blueprint('payroll',__name__,template_folder='../../templates/payroll')
 
 
@@ -132,6 +134,88 @@ def review(import_id):
                 x['cost_center_id']=x.get('cost_center_id') or (mapping.cost_center_id if mapping else None)
     return render_template('payroll/review.html',row=row,data=data,centers=centers,accounts=Account.query.filter_by(active=True).order_by(Account.code).all(),cfg=cfg,
                            automatic_allocations=automatic_allocations,matched_import_ids=matched_import_ids)
+
+@payroll_bp.route('/pagamento-stipendi', methods=['GET', 'POST'])
+@login_required
+def salary_payment():
+    """
+    Pagamento netto stipendi — chiude via banca il debito v/dipendenti aperto
+    dall'accantonamento buste paga (vedi services/payroll.py post_import,
+    ramo PAYSLIP). Senza questo passaggio il Debito v/Dipendenti c/Retribuzioni
+    resterebbe aperto per sempre: qui si genera la scrittura
+        Dare  Debiti v/Dipendenti c/Retribuzioni
+        Avere Banca c/c
+    e si marcano le buste selezionate come pagate (stesso meccanismo
+    is_paid/paid_by_entry_id già usato per le fatture fornitore in AP).
+    """
+    cfg = PayrollAccountConfig.query.first()
+    if not cfg or not cfg.net_salary_payable_account_id or not cfg.bank_account_id:
+        flash('Configura prima i conti "Debiti v/Dipendenti" e "Banca c/c" in Configurazione conti paghe.', 'danger')
+        return redirect(url_for('payroll.config'))
+
+    def _open_entries():
+        entries = (JournalEntry.query
+                   .join(JournalLine)
+                   .filter(JournalEntry.is_paid.is_(False),
+                           JournalEntry.is_reversed.is_(False),
+                           JournalLine.account_id == cfg.net_salary_payable_account_id,
+                           JournalLine.avere > 0)
+                   .distinct()
+                   .order_by(JournalEntry.doc_date)
+                   .all())
+        rows = []
+        for e in entries:
+            net_total = sum((l.avere for l in e.lines if l.account_id == cfg.net_salary_payable_account_id), Decimal('0'))
+            if net_total > 0:
+                rows.append((e, net_total))
+        return rows
+
+    if request.method == 'POST':
+        selected_ids = request.form.getlist('entry_ids[]')
+        if not selected_ids:
+            flash('Seleziona almeno una busta paga da pagare.', 'warning')
+            return redirect(url_for('payroll.salary_payment'))
+        try:
+            open_rows = {str(e.id): (e, net_total) for e, net_total in _open_entries()}
+            total = Decimal('0')
+            refs = []
+            to_mark = []
+            for eid in selected_ids:
+                pair = open_rows.get(eid)
+                if not pair:
+                    continue
+                entry, net_total = pair
+                total += net_total
+                refs.append(entry.doc_number)
+                to_mark.append(entry)
+            if total <= 0:
+                flash('Nessun importo residuo da pagare sulle buste selezionate.', 'warning')
+                return redirect(url_for('payroll.salary_payment'))
+
+            lines = [
+                {'account_id': cfg.net_salary_payable_account_id, 'dare': total, 'avere': 0},
+                {'account_id': cfg.bank_account_id, 'dare': 0, 'avere': total},
+            ]
+            payment_entry = post_journal_entry(
+                doc_type='KZ', prefix='15', doc_date=None,
+                description=f"Pagamento netto stipendi — {', '.join(refs)}",
+                lines=lines, source_module='PAGHE', reference=', '.join(refs),
+                created_by_id=current_user.id, commit=False,
+            )
+            for entry in to_mark:
+                entry.is_paid = True
+                entry.paid_by_entry_id = payment_entry.id
+            db.session.commit()
+            flash(f'Pagamento stipendi registrato — Doc. {payment_entry.doc_number}, '
+                  f'totale {float(total):.2f} € su {len(to_mark)} accantonamento/i.', 'success')
+            return redirect(url_for('gl.entry_detail', entry_id=payment_entry.id))
+        except (UnbalancedEntryError, ValueError) as e:
+            db.session.rollback()
+            flash(str(e), 'danger')
+        return redirect(url_for('payroll.salary_payment'))
+
+    return render_template('payroll/salary_payment.html', open_rows=_open_entries())
+
 
 @payroll_bp.route('/config',methods=['GET','POST'])
 @login_required
