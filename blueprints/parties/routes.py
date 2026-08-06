@@ -36,6 +36,8 @@ def _save_subject(subject=None):
     subject.is_customer = is_customer
     subject.is_supplier = is_supplier
     subject.active = request.form.get("active") == "on"
+    revenue_channel = request.form.get("revenue_channel", "").strip()
+    subject.revenue_channel = revenue_channel if revenue_channel in ("subappalto", "affidamento_diretto") else None
     return subject, None
 
 
