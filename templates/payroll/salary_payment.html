@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>💳</span> Pagamento netto stipendi <span class="tx-code">Pagamento stipendi</span></div>
+  <div class="card-body">
+    <div class="info-box">Seleziona gli accantonamenti buste paga (competenza) non ancora pagati. Genera: <strong>Dare</strong> Debiti v/Dipendenti c/Retribuzioni, <strong>Avere</strong> Banca c/c.</div>
+    {% if open_rows %}
+    <form method="POST">
+      <table class="masterledger-table">
+        <thead><tr><th></th><th>Documento</th><th>Data</th><th>Descrizione</th><th class="td-num">Netto da pagare</th></tr></thead>
+        <tbody>
+          {% for entry, net_total in open_rows %}
+          <tr>
+            <td><input type="checkbox" name="entry_ids[]" value="{{ entry.id }}"></td>
+            <td class="mono">{{ entry.doc_number }}</td>
+            <td>{{ entry.doc_date.strftime('%d/%m/%Y') }}</td>
+            <td>{{ entry.description }}</td>
+            <td class="td-num">{{ "%.2f"|format(net_total) }} €</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="btn-row"><button type="submit" class="btn btn-success">💳 Registra Pagamento</button></div>
+    </form>
+    {% else %}
+    <div class="empty-state">Nessun netto stipendi aperto da pagare — le buste contabilizzate risultano già saldate.</div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
