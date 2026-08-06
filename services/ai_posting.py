@@ -64,10 +64,132 @@ Se non riesci a distinguere con certezza le singole voci per codice
 tributo, raggruppa in modo ragionevole e segnala l'incertezza in "note".
 """
 
+_GUIDA_NOTULA_PROFESSIONISTA = """
+Questo documento è (o potrebbe essere) una NOTULA/PARCELLA di un libero
+professionista italiano (commercialista, consulente del lavoro, avvocato,
+ingegnere, geometra...), quindi SENZA Cassa Previdenziale addebitata in
+fattura salvo indicazione contraria, e soggetta a RITENUTA D'ACCONTO 20%
+sull'imponibile. Lo schema CONTABILE STANDARD è:
+
+DARE  Compensi a Professionisti (costo)     = imponibile di parcella
+DARE  IVA a Credito                         = IVA sull'imponibile (aliquota indicata in notula, di norma 22%)
+AVERE Debiti v/Professionisti                = imponibile + IVA − ritenuta d'acconto (netto da pagare al professionista)
+AVERE Debiti v/Erario c/Ritenute su Compensi Professionali = 20% dell'imponibile (ritenuta d'acconto, NON sull'IVA)
+
+Se la notula riporta un contributo di Cassa Previdenziale (es. 4% Cassa
+Commercialisti/Avvocati), quel contributo si somma all'imponibile ed è
+soggetto anch'esso a IVA, ma NON a ritenuta d'acconto: tienine conto separando
+le due componenti se il testo lo consente, altrimenti segnalalo in "note".
+"""
+
+_GUIDA_UTENZA = """
+Questo documento è (o potrebbe essere) una BOLLETTA/FATTURA DI UTENZA
+(telefonia, energia elettrica, gas, acqua...). Lo schema CONTABILE STANDARD è:
+
+DARE  Costo di competenza (Costi Telefonici e Trasmissione Dati, oppure
+      Costi per Energia Elettrica — scegli il conto più coerente col
+      fornitore/oggetto della bolletta)  = imponibile
+DARE  IVA a Credito                       = IVA sull'imponibile
+AVERE Debiti v/Fornitori                  = totale fattura
+
+Se dal testo risulta un addebito diretto su conto corrente (RID/SEPA) già
+avvenuto all'interno dello stesso documento, puoi proporre in alternativa la
+scrittura combinata con Avere Banca c/c al posto di Debiti v/Fornitori — ma
+SOLO se è inequivocabile che il pagamento è già avvenuto; altrimenti fermati
+alla sola rilevazione del debito e segnalalo in "note".
+"""
+
+_GUIDA_RIMBORSO_SPESE = """
+Questo documento è (o potrebbe essere) una NOTA SPESE / rimborso spese vive a
+un dipendente, collaboratore o agente/venditore (carburante, pedaggi, vitto e
+alloggio in trasferta, piccole spese di rappresentanza). Di norma NON è una
+fattura e non ha IVA detraibile per l'azienda (sono spese sostenute dalla
+persona fisica, poi rimborsate a piè di lista). Lo schema CONTABILE STANDARD è:
+
+DARE  Rimborsi Spese a Dipendenti e Collaboratori (costo) = totale rimborsato
+AVERE Cassa Contanti oppure Banca c/c                      = a seconda del mezzo di pagamento indicato nel testo
+
+Se il testo indica esplicitamente scontrini/fatture con IVA intestate
+all'azienda stessa (raro per le note spese vive), segnalalo in "note" invece
+di scorporare IVA di tua iniziativa.
+"""
+
 _GUIDE_PER_TIPO = {
     "busta_paga": _GUIDA_BUSTA_PAGA,
     "f24": _GUIDA_F24,
+    "notula_professionista": _GUIDA_NOTULA_PROFESSIONISTA,
+    "utenza": _GUIDA_UTENZA,
+    "rimborso_spese": _GUIDA_RIMBORSO_SPESE,
 }
+
+# ══════════════════════════════════════════════════════════════
+# CASI STORICI (few-shot) — base di partenza in attesa del vero
+# archivio di un anno di Libro Giornale di Iron Appalti S.r.l. che
+# verrà caricato successivamente. Ogni caso è un esempio VERIFICATO
+# di come si è deciso di registrare un certo tipo di documento per
+# QUESTA azienda: serve a far convergere l'AI sullo stile/i conti
+# preferiti prima ancora di avere lo storico reale. Quando arriva lo
+# storico vero, questi casi vanno sostituiti (vedi TODO sotto).
+# ══════════════════════════════════════════════════════════════
+CASI_STORICI_IRON_APPALTI = [
+    {
+        "descrizione": "Fattura passiva subappalto lavorazioni di carpenteria da terzista",
+        "scrittura": "DARE Costi per Lavorazioni e Subappalti (imponibile) + DARE IVA a Credito "
+                      "(22% imponibile) / AVERE Debiti v/Fornitori (totale)",
+    },
+    {
+        "descrizione": "Bolletta telefonica TIM Business ufficio e cantieri, da pagare",
+        "scrittura": "DARE Costi Telefonici e Trasmissione Dati (imponibile) + DARE IVA a Credito "
+                      "(22% imponibile) / AVERE Debiti v/Fornitori (totale)",
+    },
+    {
+        "descrizione": "Bolletta energia elettrica Enel Energia capannone e uffici, da pagare",
+        "scrittura": "DARE Costi per Energia Elettrica (imponibile) + DARE IVA a Credito "
+                      "(22% imponibile) / AVERE Debiti v/Fornitori (totale)",
+    },
+    {
+        "descrizione": "Notula mensile Studio Commercialista per tenuta contabilità, ritenuta 20%",
+        "scrittura": "DARE Compensi a Professionisti (imponibile) + DARE IVA a Credito (22% "
+                      "imponibile) / AVERE Debiti v/Professionisti (netto da pagare) + AVERE Debiti "
+                      "v/Erario c/Ritenute su Compensi Professionali (20% dell'imponibile)",
+    },
+    {
+        "descrizione": "Rimborso spese vive (carburante, pedaggi, vitto) ad agente/venditore, pagato in contanti",
+        "scrittura": "DARE Rimborsi Spese a Dipendenti e Collaboratori (totale) / AVERE Cassa Contanti (totale)",
+    },
+]
+# TODO (Maurizio): quando arriva il vero anno di Libro Giornale di Iron
+# Appalti, sostituire CASI_STORICI_IRON_APPALTI con casi ESTRATTI da quello
+# storico reale (stessa struttura: descrizione + scrittura effettivamente
+# usata) — a quel punto questi 5 casi placeholder possono essere rimossi.
+
+_CONTESTO_AZIENDA = """
+CONTESTO AZIENDA: stai contabilizzando per IRON APPALTI S.R.L., impresa
+italiana attiva in LAVORAZIONI DI CARPENTERIA METALLICA E OPERE INDUSTRIALI
+eseguite SIA in subappalto (per conto di un appaltatore principale) SIA in
+affidamento diretto da grandi committenti (senza appaltatore intermedio) —
+Iron Appalti non è essa stessa un appaltatore generale, è chi esegue
+materialmente la lavorazione. Per questo i ricavi sono su DUE conti distinti:
+4000 "Ricavi per Lavorazioni in Subappalto" e 4001 "Ricavi per Lavorazioni in
+Affidamento Diretto (Grandi Committenti)" — quale dei due dipende dal cliente
+in fattura, non serve deciderlo tu se il documento non è una fattura attiva
+(quelle passano dal ciclo Fatturazione DDT, non dalla Prima Nota). I
+documenti più frequenti che ricevi in Prima Nota sono: fatture passive per
+materiali e subappalti a terzisti, utenze (telefono, energia elettrica),
+notule di professionisti (commercialista, consulente del lavoro) con
+ritenuta d'acconto 20%, rimborsi spese vive a venditori/agenti, buste paga e
+F24 del personale, e le consuete scritture di assestamento/chiusura di fine
+esercizio (ammortamenti, ratei/risconti, svalutazione crediti, imposte).
+"""
+
+
+def _casi_storici_prompt():
+    righe = "\n".join(f'- "{c["descrizione"]}" → {c["scrittura"]}' for c in CASI_STORICI_IRON_APPALTI)
+    return (
+        "CASI STORICI GIÀ VERIFICATI per questa azienda (usali come riferimento di stile e di scelta "
+        "conti quando il nuovo documento è dello stesso tipo — non sono un vincolo se il documento reale "
+        "differisce negli importi o nei dettagli):\n" + righe
+    )
 
 
 def estrai_testo_pdf(file_stream, max_pagine=15, max_caratteri=12000):
@@ -160,6 +282,8 @@ def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_docum
 
     system_prompt = (
         "Sei un contabile esperto in partita doppia secondo i principi contabili italiani (OIC).\n"
+        + _CONTESTO_AZIENDA + "\n"
+        + _casi_storici_prompt() + "\n\n"
         "Il piano dei conti disponibile è ESATTAMENTE questo (codice | nome | tipo conto). "
         "Non puoi inventare altri conti né altri codici:\n"
         f"{piano_conti}\n\n"
