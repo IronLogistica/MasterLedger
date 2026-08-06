@@ -3,6 +3,14 @@
   <div class="form-group"><label>Denominazione <span class="req">*</span></label><input name="name" required value="{{ party.name if party else '' }}"></div>
   <div class="form-group"><label>Tipo</label><select name="subject_type"><option value="azienda" {{ 'selected' if not party or party.subject_type == 'azienda' }}>Azienda</option><option value="persona" {{ 'selected' if party and party.subject_type == 'persona' }}>Persona fisica</option></select></div>
   <div class="form-group"><label>Ruoli <span class="req">*</span></label><label><input type="checkbox" name="is_customer" {{ 'checked' if party and party.is_customer }}> Cliente</label> &nbsp; <label><input type="checkbox" name="is_supplier" {{ 'checked' if party and party.is_supplier }}> Fornitore</label></div>
+  <div class="form-group"><label>Canale ricavo (solo clienti)</label>
+    <select name="revenue_channel">
+      <option value="" {{ 'selected' if not party or not party.revenue_channel }}>-- Non qualificato --</option>
+      <option value="subappalto" {{ 'selected' if party and party.revenue_channel == 'subappalto' }}>Subappalto (per conto di appaltatore principale) — conto 4000</option>
+      <option value="affidamento_diretto" {{ 'selected' if party and party.revenue_channel == 'affidamento_diretto' }}>Affidamento diretto (grande committente) — conto 4001</option>
+    </select>
+    <small>Determina il conto ricavi usato in automatico da Fatturazione DDT (SD).</small>
+  </div>
   <div class="form-group"><label>Partita IVA</label><input name="piva" maxlength="20" value="{{ party.piva if party else '' }}"></div>
   <div class="form-group"><label>Codice fiscale</label><input name="codice_fiscale" maxlength="16" value="{{ party.codice_fiscale if party else '' }}"></div>
   <div class="form-group"><label>Indirizzo</label><input name="indirizzo" value="{{ party.indirizzo if party else '' }}"></div>
