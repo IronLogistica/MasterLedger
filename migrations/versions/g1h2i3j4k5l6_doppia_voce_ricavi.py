@@ -24,13 +24,24 @@ def upgrade():
         # 'subappalto' | 'affidamento_diretto' | NULL (non ancora qualificato)
         op.add_column('economic_subjects', sa.Column('revenue_channel', sa.String(20), nullable=True))
 
-    # 4000 esisteva già come conto ricavi generico: lo si restringe al canale
-    # "subappalto" (lavorazioni per conto di un appaltatore principale) e si
-    # aggiunge 4001 per l'"affidamento diretto" (commessa diretta di un
-    # grande committente, senza un appaltatore principale in mezzo).
-    b.execute(sa.text(
+    # 4000 esisteva già come conto ricavi generico (creato da flask seed): lo
+    # si restringe al canale "subappalto" (lavorazioni per conto di un
+    # appaltatore principale). Se il DB non ha ancora MAI eseguito
+    # `flask seed` (caso reale riscontrato: 4000 assente), l'UPDATE da solo
+    # non lo crea — quindi qui si fa un vero upsert: aggiorna se esiste,
+    # altrimenti lo crea direttamente con il nome corretto.
+    result = b.execute(sa.text(
         "UPDATE accounts SET name=:n WHERE code=:c AND name != :n"
     ), {"c": "4000", "n": "Ricavi per Lavorazioni in Subappalto"})
+    if not b.execute(sa.text("SELECT 1 FROM accounts WHERE code=:c"), {"c": "4000"}).fetchone():
+        b.execute(sa.text(
+            "INSERT INTO accounts (code, name, account_type, cost_relevant, cost_relevant_type, active) "
+            "VALUES (:c, :n, :t, :r, :rt, true)"
+        ), {"c": "4000", "n": "Ricavi per Lavorazioni in Subappalto",
+            "t": "ricavo", "r": True, "rt": "REVENUE"})
+
+    # 4001: lavorazioni in "affidamento diretto" (grande committente senza
+    # appaltatore intermedio).
 
     if not b.execute(sa.text("SELECT 1 FROM accounts WHERE code=:c"), {"c": "4001"}).fetchone():
         b.execute(sa.text(
