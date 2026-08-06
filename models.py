@@ -261,6 +261,13 @@ class EconomicSubject(db.Model):
     iban = db.Column(db.String(34))
     active = db.Column(db.Boolean, default=True)
 
+    # Canale ricavo (solo per i clienti): 'subappalto' se Iron Appalti lavora
+    # per conto di un appaltatore principale (conto ricavi 4000), oppure
+    # 'affidamento_diretto' se la commessa arriva direttamente da un grande
+    # committente senza appaltatore intermedio (conto ricavi 4001). Guida la
+    # scelta automatica del conto ricavi in Fatturazione DDT (blueprints/sd).
+    revenue_channel = db.Column(db.String(20), nullable=True)
+
     @property
     def role_label(self):
         if self.is_customer and self.is_supplier:
