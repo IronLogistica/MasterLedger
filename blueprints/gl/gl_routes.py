@@ -8,6 +8,7 @@ from services.posting import post_journal_entry, reverse_journal_entry, Unbalanc
 from services.co import validate_co_assignment, COValidationError
 from services.ai_posting import suggerisci_scrittura, estrai_testo_pdf, AISuggestionError
 from services.classificazione_operazioni import classifica, guida_per_classe, CLASSI_OPERAZIONE
+from services.rettifiche_operazioni import classifica_rettifica, guida_per_rettifica, CATALOGO_RETTIFICHE
 
 gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
 
@@ -243,19 +244,34 @@ def ai_suggerisci():
     contatta_commercialista = False
     motivo_alert = None
     classe_nome = None
-    if classe_chiave:
+    rettifica_chiave = None
+
+    if classe_chiave and not CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
+        # una delle 12 classi ordinarie riconosciuta con schema fisso
         classe_nome = CLASSI_OPERAZIONE[classe_chiave]["nome"]
-        if CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
-            contatta_commercialista = True
-            motivo_alert = (f"Classe riconosciuta ('{classe_nome}') non ha uno schema di conti "
-                             f"fisso: la proposta qui sotto è solo indicativa, verificarla con "
-                             f"il commercialista prima di registrare.")
-        elif confidenza_classe >= 0.6:
+        if confidenza_classe >= 0.6:
             guida_extra = guida_per_classe(classe_chiave, code_to_name)
     else:
-        contatta_commercialista = True
-        motivo_alert = ("Documento non riconducibile a nessuna classe nota di operazione "
-                         "ricorrente: verificare con il commercialista prima di registrare.")
+        # non è una delle 12 ordinarie (o è RETTIFICA_GENERICA): prova il
+        # catalogo dettagliato delle rettifiche (37 sottoclassi A1-H3)
+        rettifica_chiave, confidenza_rettifica = classifica_rettifica(testo_da_classificare)
+        if rettifica_chiave:
+            sc = CATALOGO_RETTIFICHE[rettifica_chiave]
+            classe_nome = f"{rettifica_chiave} — {sc['nome']}"
+            if confidenza_rettifica >= 0.6:
+                guida_extra = guida_per_rettifica(rettifica_chiave, code_to_name)
+            if sc.get("conto_mancante"):
+                contatta_commercialista = True
+                motivo_alert = (f"Sottoclasse '{sc['nome']}' richiede un conto che non esiste "
+                                 f"ancora nel piano dei conti: nessuna proposta completa possibile.")
+            elif sc["livello"] == "M":
+                contatta_commercialista = True
+                motivo_alert = (f"Sottoclasse '{sc['nome']}' è di livello M (sempre manuale): "
+                                 f"richiede giudizio professionale specifico, non solo il click "
+                                 f"di conferma ordinario.")
+        else:
+            contatta_commercialista = True
+            motivo_alert = "Documento non riconducibile a nessuna classe o sottoclasse nota."
 
     try:
         suggerimento = suggerisci_scrittura(descrizione, accounts, testo_documento=testo_documento,
@@ -269,7 +285,7 @@ def ai_suggerisci():
     code_to_id = {a.code: a.id for a in accounts}
     righe_risolte = []
     avvisi = []
-    if guida_extra and classe_chiave:
+    if guida_extra and classe_chiave and not CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
         conti_ammessi_classe = set(
             CLASSI_OPERAZIONE[classe_chiave].get("dare_fissi", []) +
             CLASSI_OPERAZIONE[classe_chiave].get("dare_variabili", []) +
@@ -280,8 +296,18 @@ def ai_suggerisci():
             if str(line.get("account_code", "")).strip() not in conti_ammessi_classe:
                 contatta_commercialista = True
                 motivo_alert = (f"L'AI ha proposto un conto fuori dallo schema della classe "
-                                 f"'{classe_nome}': verificare con il commercialista prima di "
-                                 f"registrare.")
+                                 f"'{classe_nome}'.")
+                break
+    elif guida_extra and rettifica_chiave:
+        conti_ammessi_rettifica = set()
+        for variante in CATALOGO_RETTIFICHE[rettifica_chiave].get("schema", []):
+            for riga in variante:
+                conti_ammessi_rettifica.add(riga["conto"])
+        for line in suggerimento.get("lines", []):
+            if str(line.get("account_code", "")).strip() not in conti_ammessi_rettifica:
+                contatta_commercialista = True
+                motivo_alert = (f"L'AI ha proposto un conto fuori dallo schema della sottoclasse "
+                                 f"'{classe_nome}'.")
                 break
     for line in suggerimento.get("lines", []):
         code = str(line.get("account_code", "")).strip()
