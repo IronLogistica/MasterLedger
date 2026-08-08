@@ -97,12 +97,18 @@ CLASSI_OPERAZIONE = {
         "parole_chiave": ["rettifica", "storno", "movimento generico"],
         "dare_fissi": [],
         "avere_fissi": [],
-        "note": "Nessuno schema fisso possibile: i conti coinvolti dipendono interamente dal "
-                "caso. Non proporre uno schema — passa sempre da revisione con l'AI generica "
-                "(suggerisci_scrittura) o da CONTATTA_COMMERCIALISTA se anche quella è incerta.",
-        "sempre_incerta": True,  # questa classe non genera mai una proposta automatica
+        "note": "Nessuno schema fisso in questa classe: le rettifiche vere hanno ora un catalogo "
+                "dettagliato di 37 sottoclassi (A1-H3) in services/rettifiche_operazioni.py, con "
+                "schema Dare/Avere e livello A/P/M per ciascuna — vedi classifica_rettifica().",
+        "sempre_incerta": True,  # questa classe base non genera mai una proposta automatica
     },
 }
+
+# Altre classi (leasing, mutui, assicurazioni, oneri doganali/provvigioni, ammortamenti,
+# svalutazione crediti, prelievi soci) sono in revisione con il commercialista — vedi
+# classi_operazione_DA_VALIDARE.md nella cartella principale del progetto. Non sono ancora
+# qui perché non confermate da nessuna registrazione reale di Iron Appalti: vanno aggiunte a
+# questo dizionario solo dopo l'approvazione, con lo stesso formato delle classi sopra.
 
 
 def guida_per_classe(chiave, code_to_name=None):
