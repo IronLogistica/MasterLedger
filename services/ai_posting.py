@@ -114,6 +114,52 @@ all'azienda stessa (raro per le note spese vive), segnalalo in "note" invece
 di scorporare IVA di tua iniziativa.
 """
 
+_GUIDA_OPERAZIONI_RICORRENTI_IRON_APPALTI = """
+OPERAZIONI RICORRENTI DI IRON APPALTI in PRIMA NOTA LIBERA (osservate nei
+libri giornale di gennaio 2024, 2025 e 2026 — NON ancora un anno completo,
+solo gennaio ripetuto tre volte).
+
+ATTENZIONE — ambito: le fatture cliente/fornitore passano dai moduli
+Fatturazione DDT (SD) e Fattura Fornitore (MM/AP), che contabilizzano già
+da soli. Buste paga, accantonamento stipendi, pagamento netto stipendi e
+F24 passano dal modulo Buste Paga (upload PDF + revisione), che contabilizza
+anche quello da solo. NON proporre scritture per questi casi: se il testo
+del documento sembra una busta paga, un F24, o un pagamento stipendi,
+segnalalo in "note" indicando di usare il modulo dedicato invece della
+Prima Nota libera.
+
+Restano da gestire qui in Prima Nota libera (nessun modulo dedicato) questi
+tipi di operazione, con lo schema osservato — usalo come PRIMO SUGGERIMENTO
+ma segnala sempre in "note" che proviene da un campione limitato (solo
+gennaio) e che il verso Dare/Avere è stato ricostruito da una stampa PDF che
+non separava le due colonne — va riconfermato dall'operatore, specialmente
+le prime volte:
+
+- PAGAMENTO ENTI RATEIZZATI / ADER (rottamazione cartelle a rate): DARE
+  Banca c/c o PayPal (uscita complessiva della rata) / AVERE INPS
+  c/contributi, interessi passivi su pagamenti, multe e sanzioni
+  (indeducibile), iva c/erario, commissioni/oneri bancari — la
+  scomposizione tra queste voci varia rata per rata, verificare sempre sul
+  documento.
+- PAGAMENTO A FONDI TFR ESTERNI (es. Alleanza Previdenza): DARE Debiti
+  v/fondo TFR / AVERE Banca c/c.
+- PAGAMENTO CASSA EDILE (piano di rientro a rate): DARE debiti v/Cassa
+  Edile / AVERE Banca c/c.
+- PAGAMENTO EFFETTI (cambiali passive): DARE effetti passivi / AVERE Banca
+  c/c o Cassa contanti.
+- ADDEBITO COMMISSIONI BANCARIE: DARE commissioni/oneri bancari o imposte
+  di bollo / AVERE Banca c/c.
+- MOVIMENTO GENERICO (rettifiche varie): schema variabile, dipende dal
+  conto da rettificare — nessuno schema fisso, segui il testo del
+  documento.
+
+Se non è ancora chiaro se un'operazione di questo tipo si ripete anche
+negli altri mesi dell'anno (i dati coprono solo gennaio), NON dare per
+scontato che lo schema sia identico tutto l'anno: trattalo come punto di
+partenza, non come regola certa.
+"""
+
+
 _GUIDE_PER_TIPO = {
     "busta_paga": _GUIDA_BUSTA_PAGA,
     "f24": _GUIDA_F24,
@@ -234,7 +280,7 @@ def estrai_testo_pdf(file_stream, max_pagine=15, max_caratteri=12000):
     return testo, pagine_lette
 
 
-def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_documento=None):
+def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_documento=None, guida_extra=None):
     """
     Chiede all'AI di proporre le righe di una scrittura contabile a partire
     da una descrizione in linguaggio naturale e/o dal testo di un documento
@@ -250,6 +296,11 @@ def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_docum
               alla richiesta lo schema contabile standard italiano per quel tipo
               di documento (vedi _GUIDE_PER_TIPO), così l'AI non deve indovinare
               da zero lo schema di scritture più complesse.
+    guida_extra: testo aggiuntivo opzionale da iniettare nel prompt — usato da
+              services/classificazione_operazioni.py per restringere l'AI ai
+              codici conto esatti di una classe di operazione riconosciuta
+              deterministicamente dal testo (es. AdER, Cassa Edile), invece di
+              lasciarle scegliere liberamente tra tutto il piano dei conti.
 
     Ritorna un dict:
         {"description": str, "lines": [{"account_code": str, "pk": "40"|"50", "amount": float}, ...], "note": str|None}
@@ -283,6 +334,7 @@ def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_docum
     system_prompt = (
         "Sei un contabile esperto in partita doppia secondo i principi contabili italiani (OIC).\n"
         + _CONTESTO_AZIENDA + "\n"
+        + _GUIDA_OPERAZIONI_RICORRENTI_IRON_APPALTI + "\n"
         + _casi_storici_prompt() + "\n\n"
         "Il piano dei conti disponibile è ESATTAMENTE questo (codice | nome | tipo conto). "
         "Non puoi inventare altri conti né altri codici:\n"
@@ -318,6 +370,14 @@ def suggerisci_scrittura(descrizione, accounts, testo_documento=None, tipo_docum
     guida_specialistica = _GUIDE_PER_TIPO.get(tipo_documento, "")
     if guida_specialistica:
         system_prompt += "\n\n" + guida_specialistica
+    if guida_extra:
+        system_prompt += (
+            "\n\nCLASSIFICAZIONE DETERMINISTICA (non dell'AI, da un riconoscimento a regole sul "
+            "testo del documento): questo documento è stato riconosciuto come appartenente a una "
+            "classe nota, con questo schema di conti ammessi — USA SOLO questi codici conto, non "
+            "altri, e se gli importi che leggi dal documento non ti permettono di usare esattamente "
+            "questi conti, scrivilo chiaramente in \"note\" invece di forzare una scelta:\n" + guida_extra
+        )
 
     client = OpenAI(api_key=api_key)
 
