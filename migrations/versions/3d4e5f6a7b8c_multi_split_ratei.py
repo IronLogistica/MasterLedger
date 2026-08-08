@@ -10,8 +10,11 @@ def upgrade():
     # Preserve existing one-centre mappings as a deterministic 100% allocation.
     op.execute("INSERT INTO payroll_employee_allocations (mapping_id,cost_center_id,percentage) SELECT id,cost_center_id,100.00 FROM payroll_employee_mappings")
     op.create_table('allocation_splits', sa.Column('id',sa.Integer(),primary_key=True),sa.Column('document_type',sa.String(30),nullable=False),sa.Column('document_id',sa.Integer(),nullable=False),sa.Column('document_line_id',sa.Integer(),nullable=True),sa.Column('cost_center_id',sa.Integer(),sa.ForeignKey('cost_centers.id'),nullable=False),sa.Column('percentage',sa.Numeric(5,2),nullable=False),sa.UniqueConstraint('document_type','document_id','document_line_id','cost_center_id',name='uq_allocation_split_target_center'))
-    for name in ('accrued_holiday_expense_account_id','accrued_permission_expense_account_id','accrued_thirteenth_expense_account_id','accrued_payable_account_id','tfr_expense_account_id','tfr_fund_account_id'):
-        op.add_column('payroll_account_configs',sa.Column(name,sa.Integer(),sa.ForeignKey('accounts.id'),nullable=True))
+    with op.batch_alter_table('payroll_account_configs', schema=None) as batch_op:
+        for name in ('accrued_holiday_expense_account_id','accrued_permission_expense_account_id','accrued_thirteenth_expense_account_id','accrued_payable_account_id','tfr_expense_account_id','tfr_fund_account_id'):
+            batch_op.add_column(sa.Column(name,sa.Integer(),sa.ForeignKey('accounts.id', name=f'fk_payroll_account_configs_{name}'),nullable=True))
 def downgrade():
-    for name in ('tfr_fund_account_id','tfr_expense_account_id','accrued_payable_account_id','accrued_thirteenth_expense_account_id','accrued_permission_expense_account_id','accrued_holiday_expense_account_id'):op.drop_column('payroll_account_configs',name)
+    with op.batch_alter_table('payroll_account_configs', schema=None) as batch_op:
+        for name in ('tfr_fund_account_id','tfr_expense_account_id','accrued_payable_account_id','accrued_thirteenth_expense_account_id','accrued_permission_expense_account_id','accrued_holiday_expense_account_id'):
+            batch_op.drop_column(name)
     op.drop_table('allocation_splits');op.drop_table('payroll_employee_allocations')

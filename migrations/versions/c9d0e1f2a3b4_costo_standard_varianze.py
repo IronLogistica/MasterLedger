@@ -30,7 +30,8 @@ def upgrade():
 
     with op.batch_alter_table('production_entries', schema=None) as batch_op:
         batch_op.add_column(sa.Column('standard_cost_id', sa.Integer(),
-                                       sa.ForeignKey('standard_costs.id'), nullable=True))
+                                       sa.ForeignKey('standard_costs.id', name='fk_production_entries_standard_cost_id'),
+                                       nullable=True))
         batch_op.add_column(sa.Column('variance_materiali', sa.Numeric(14, 2), nullable=False, server_default='0'))
         batch_op.add_column(sa.Column('variance_manodopera', sa.Numeric(14, 2), nullable=False, server_default='0'))
         batch_op.add_column(sa.Column('variance_overhead', sa.Numeric(14, 2), nullable=False, server_default='0'))
