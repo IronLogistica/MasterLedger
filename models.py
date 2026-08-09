@@ -801,6 +801,10 @@ class Delivery(db.Model):
     billing_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Vero quando MasterLogistic-WMS ha davvero confermato la giacenza al
+    # momento della spedizione; False quando il DDT è stato registrato col
+    # bypass (WMS non ancora collegato) — segnalato bene in elenco.
+    stock_verified = db.Column(db.Boolean, default=True)
     # Fase 4 (progettazione parti mancanti, punto 4) — storno di dominio
     is_reversed = db.Column(db.Boolean, default=False)
     reversal_reason = db.Column(db.String(255))
