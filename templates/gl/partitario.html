@@ -27,6 +27,7 @@
           <td>
             {% if d.stato == "Aperto" %}<span class="status-badge status-open">Aperto</span>
             {% elif d.stato == "Stornato" %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Stornato</span>
+            {% elif d.stato == "Eseguito" %}<span class="status-badge" style="background: rgba(150,150,150,.2); color: #bbb;">Eseguito</span>
             {% else %}<span class="status-badge status-paid">Pagato/Incassato</span>{% endif %}
           </td>
         </tr>
