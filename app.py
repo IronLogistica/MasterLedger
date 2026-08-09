@@ -16,7 +16,7 @@ from flask import Flask, render_template
 from flask_login import current_user
 
 from config import Config
-from extensions import db, migrate, login_manager
+from extensions import db, migrate, login_manager, csrf
 
 
 def create_app(config_class=Config):
@@ -27,6 +27,7 @@ def create_app(config_class=Config):
     db.init_app(app)
     migrate.init_app(app, db)
     login_manager.init_app(app)
+    csrf.init_app(app)
 
     # ── Modelli (import qui per evitare cicli di import) ───────
     from models import User
@@ -107,17 +108,17 @@ def create_app(config_class=Config):
                 if not Account.query.filter_by(code=code).first():
                     db.session.add(Account(code=code, name=name, account_type=atype,
                                            cost_relevant=co_rel, cost_relevant_type=co_type))
-            for uname, pwd, role in (
-                ("Angelo", "Angelo1234", "operatore"),
-                ("Maurizio", "Maurizio1234", "commercialista"),
-            ):
-                u = User.query.filter(db.func.lower(User.username) == uname.lower()).first()
-                if u is None:
-                    u = User(username=uname, full_name=uname, role=role)
-                    db.session.add(u)
-                # Garantisce che la password sia sempre quella prevista
-                u.set_password(pwd)
-                u.is_active_flag = True
+            # Gli utenti demo sono opt-in e vengono creati una sola volta: non si
+            # sovrascrivono mai password o stato di utenze già presenti.
+            if app.config.get("BOOTSTRAP_DEMO_USERS"):
+                for uname, pwd, role in (
+                    ("Angelo", "Angelo1234", "operatore"),
+                    ("Maurizio", "Maurizio1234", "commercialista"),
+                ):
+                    if User.query.filter(db.func.lower(User.username) == uname.lower()).first() is None:
+                        u = User(username=uname, full_name=uname, role=role)
+                        u.set_password(pwd)
+                        db.session.add(u)
             db.session.commit()
         except Exception:
             db.session.rollback()

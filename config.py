@@ -29,6 +29,14 @@ class Config:
     COMPANY_NAME = os.environ.get("COMPANY_NAME", "IRON SEGNALETICA")
 
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
+    REMEMBER_COOKIE_DURATION = timedelta(hours=8)
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+    REMEMBER_COOKIE_HTTPONLY = True
+    REMEMBER_COOKIE_SAMESITE = "Lax"
+    REMEMBER_COOKIE_SECURE = SESSION_COOKIE_SECURE
+    BOOTSTRAP_DEMO_USERS = os.environ.get("BOOTSTRAP_DEMO_USERS", "false").lower() in ("1", "true", "yes")
 
     # Chiave API OpenAI per il suggerimento AI delle scritture di Prima Nota
     # (facoltativa: se assente, il pulsante "Suggerisci con AI" mostra un
