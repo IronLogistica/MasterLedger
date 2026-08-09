@@ -32,6 +32,12 @@
         </tr>
       </thead>
       <tbody>
+        {% if filters.date_from %}
+        <tr>
+          <td colspan="6"><em>Saldo iniziale al {{ filters.date_from }}</em></td>
+          <td class="mono"><strong>{{ "%.2f"|format(saldo_iniziale) }}</strong></td>
+        </tr>
+        {% endif %}
         {% for m in movimenti %}
         <tr>
           <td>{{ m.entry.doc_date.strftime("%d/%m/%Y") }}</td>

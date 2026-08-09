@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span>⚙️</span> Piano dei conti canonico — Configurazione
+  </div>
+  <div class="card-body">
+    <div class="info-box">
+      Ogni concetto contabile qui sotto punta oggi allo stesso conto già usato da AP/AR/GL/Cespiti —
+      cambiare valore qui aggiorna dove il codice legge il conto, IN UN SOLO POSTO, invece di andarlo
+      a cercare in ogni blueprint. <strong>Le scritture già registrate non vengono toccate</strong>:
+      solo le nuove registrazioni useranno il conto appena selezionato.
+    </div>
+    <div class="info-box" style="border-left-color: var(--ml-red);">
+      ⚠️ Prima di cambiare un valore qui su dati reali, verifica con il commercialista che il nuovo
+      conto sia davvero l'equivalente corretto — un cambio di mappatura sposta dove finiscono TUTTE
+      le prossime registrazioni di quel tipo.
+    </div>
+
+    <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <table class="masterledger-table">
+        <thead>
+          <tr><th>Categoria</th><th>Concetto</th><th>Conto attuale</th><th>Nuovo conto</th></tr>
+        </thead>
+        <tbody>
+          {% for m in mappings %}
+          <tr>
+            <td>{{ m.category }}</td>
+            <td>{{ m.label }}</td>
+            <td class="mono">{{ m.account.code }} — {{ m.account.name }}</td>
+            <td>
+              <select name="account_{{ m.id }}">
+                {% for a in accounts %}
+                <option value="{{ a.id }}" {% if a.id == m.account_id %}selected{% endif %}>{{ a.code }} — {{ a.name }} ({{ a.account_type }})</option>
+                {% endfor %}
+              </select>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4">Nessun concetto configurato — esegui il seed.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit" class="btn" style="margin-top:14px;">Salva configurazione</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -28,7 +28,7 @@
       <div id="ai-esito" style="margin-top:8px; font-size:13px;"></div>
     </div>
 
-    <form method="POST" id="journal_entry-form">
+    <form method="POST" id="journal_entry-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Data Documento</label>
@@ -149,17 +149,18 @@ async function suggerisciAI() {
   btn.textContent = file ? '⏳ Leggo il documento...' : '⏳ Un attimo...';
   esito.innerHTML = '';
   try {
+    const csrfToken = document.querySelector('input[name=csrf_token]').value;
     let resp;
     if (file) {
       const formData = new FormData();
       formData.append('descrizione', testo);
       formData.append('tipo_documento', tipoDocumento);
       formData.append('documento', file);
-      resp = await fetch('/gl/ai/suggerisci', { method: 'POST', body: formData });
+      resp = await fetch('/gl/ai/suggerisci', { method: 'POST', headers: { 'X-CSRFToken': csrfToken }, body: formData });
     } else {
       resp = await fetch('/gl/ai/suggerisci', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
         body: JSON.stringify({ descrizione: testo, tipo_documento: tipoDocumento })
       });
     }

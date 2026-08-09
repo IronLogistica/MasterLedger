@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🏦</span> Riconciliazione Bancaria</div>
+  <div class="card-body">
+    <div class="info-box">
+      Importa l'estratto conto (CSV: colonne data, descrizione, importo — positivo=accredito,
+      negativo=addebito; opzionali saldo_iniziale/saldo_finale sulla prima riga per il controllo
+      di quadratura). Il matching automatico abbina solo i casi inequivocabili (stesso importo,
+      stessa data ± 3 giorni, un solo candidato) — il resto va abbinato a mano qui sotto.
+    </div>
+
+    <form method="post" action="{{ url_for('gl.bank_reconciliation_import') }}" enctype="multipart/form-data"
+          style="display:flex; gap:10px; align-items:end; margin-bottom:20px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div>
+        <label>Conto banca</label>
+        <select name="bank_account_id" required>
+          {% for a in bank_accounts %}
+          <option value="{{ a.id }}">{{ a.code }} — {{ a.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div><label>File CSV</label><input type="file" name="csv_file" accept=".csv" required></div>
+      <button type="submit" class="btn">Importa</button>
+    </form>
+
+    <h3>Estratti conto importati</h3>
+    <table class="masterledger-table">
+      <thead><tr><th>Periodo</th><th>Conto</th><th>Saldo iniziale</th><th>Saldo finale</th><th></th></tr></thead>
+      <tbody>
+        {% for s in statements %}
+        <tr>
+          <td>{{ s.period_from.strftime("%d/%m/%Y") }} — {{ s.period_to.strftime("%d/%m/%Y") }}</td>
+          <td class="mono">{{ s.bank_account.code }}</td>
+          <td class="mono">{{ "%.2f"|format(s.opening_balance) }}</td>
+          <td class="mono">{{ "%.2f"|format(s.closing_balance) }}</td>
+          <td><a class="btn btn-ghost" href="{{ url_for('gl.bank_reconciliation', statement_id=s.id) }}">Apri</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nessun estratto conto importato.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if statement_id %}
+    <h3 style="margin-top:24px;">Righe estratto conto — stato riconciliazione</h3>
+    <table class="masterledger-table">
+      <thead><tr><th>Data</th><th>Descrizione</th><th>Importo</th><th>Residuo</th><th>Stato</th><th>Abbina manualmente</th></tr></thead>
+      <tbody>
+        {% for l in lines %}
+        <tr>
+          <td>{{ l.value_date.strftime("%d/%m/%Y") }}</td>
+          <td>{{ l.description }}</td>
+          <td class="mono">{{ "%.2f"|format(l.amount) }}</td>
+          <td class="mono">{{ "%.2f"|format(l.residual_amount) }}</td>
+          <td>
+            {% if l.is_reconciled %}<span class="status-badge status-paid">Riconciliata</span>
+            {% else %}<span class="status-badge status-open">Da abbinare</span>{% endif %}
+          </td>
+          <td>
+            {% if not l.is_reconciled %}
+            <details style="display:inline-block;">
+              <summary class="btn btn-ghost" style="display:inline;">Abbina</summary>
+              <form method="post" action="{{ url_for('gl.bank_reconciliation_match') }}" style="margin-top:8px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="statement_line_id" value="{{ l.id }}">
+                <input type="hidden" name="statement_id" value="{{ statement_id }}">
+                <select name="journal_line_id" required>
+                  <option value="">— seleziona movimento GL —</option>
+                  {% for jl in unmatched_gl_lines %}
+                  <option value="{{ jl.id }}">{{ jl.entry.doc_number }} — {{ jl.entry.doc_date.strftime("%d/%m/%Y") }} — {{ jl.entry.description }}</option>
+                  {% endfor %}
+                </select>
+                <input type="number" step="0.01" name="amount" value="{{ l.residual_amount }}" required style="width:100px;">
+                <button type="submit" class="btn">Conferma</button>
+              </form>
+            </details>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">Nessuna riga.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

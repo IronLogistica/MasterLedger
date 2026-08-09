@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🔒</span> Periodi contabili — Chiusura e blocco</div>
+  <div class="card-body">
+    <div class="info-box">
+      Un periodo CHIUSO blocca ogni nuova registrazione o storno su quella data, in tutti i moduli
+      (GL, AP, AR, Cespiti, Paghe, MM, SD) — il controllo è centralizzato nel servizio di posting,
+      non aggirabile da un singolo blueprint.
+    </div>
+
+    <div class="info-box" style="border-left-color: {{ 'var(--ml-green)' if lock_active else 'var(--ml-orange)' }};">
+      Blocco su periodi <strong>NON creati</strong>:
+      {% if lock_active %}
+        <strong style="color: var(--ml-green);">ATTIVO</strong> — una data senza periodo configurato blocca la registrazione.
+      {% else %}
+        <strong style="color: var(--ml-orange);">disattivo</strong> — una data senza periodo configurato è trattata come aperta (comportamento storico).
+        Utile solo mentre stai ancora creando i periodi iniziali: attivalo appena hai coperto le date che usi oggi.
+      {% endif %}
+      <form method="post" action="{{ url_for('gl.periods_lock_toggle') }}" style="display:inline; margin-left:10px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost">{{ "Disattiva" if lock_active else "Attiva" }}</button>
+      </form>
+    </div>
+
+    <h3>Crea nuovo periodo</h3>
+    <form method="post" action="{{ url_for('gl.periods_create') }}" style="display:flex; gap:10px; align-items:end; margin-bottom:20px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div><label>Anno</label><input type="number" name="year" min="2020" max="2100" required></div>
+      <div><label>Mese (1-12)</label><input type="number" name="month" min="1" max="12" required></div>
+      <button type="submit" class="btn">Crea periodo (mensile, aperto)</button>
+    </form>
+
+    <table class="masterledger-table">
+      <thead><tr><th>Periodo</th><th>Intervallo</th><th>Stato</th><th>Chiuso da</th><th>Azioni</th></tr></thead>
+      <tbody>
+        {% for p in periods %}
+        <tr>
+          <td class="mono">{{ "%02d"|format(p.month) }}/{{ p.year }}</td>
+          <td>{{ p.start_date.strftime("%d/%m/%Y") }} — {{ p.end_date.strftime("%d/%m/%Y") }}</td>
+          <td>
+            {% if p.status == "aperto" %}<span class="status-badge status-open">Aperto</span>
+            {% elif p.status == "chiuso" %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Chiuso</span>
+            {% else %}<span class="status-badge status-paid">Riaperto temp.</span>{% endif %}
+          </td>
+          <td>{{ p.closed_by.username if p.closed_by else "—" }}</td>
+          <td>
+            {% if p.is_open %}
+            <form method="post" action="{{ url_for('gl.periods_close', period_id=p.id) }}" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-ghost">Chiudi</button>
+            </form>
+            {% else %}
+            <details style="display:inline-block;">
+              <summary class="btn btn-ghost" style="display:inline;">Riapri</summary>
+              <form method="post" action="{{ url_for('gl.periods_reopen', period_id=p.id) }}" style="margin-top:8px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="reason" placeholder="Motivo della riapertura (obbligatorio)" required style="width:220px;">
+                <button type="submit" class="btn">Conferma riapertura</button>
+              </form>
+            </details>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">Nessun periodo creato.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>📅</span> Scadenzario — rate aperte</div>
+  <div class="card-body">
+    <div class="info-box">
+      Ogni fattura genera almeno una rata. Qui puoi selezionare rate anche di importo diverso
+      dal totale fattura per un pagamento/incasso PARZIALE — per compensare una fattura per
+      intero in un colpo solo, usa Pagamento Fornitore / Incasso Cliente come prima.
+    </div>
+
+    <form method="get" style="display:flex; gap:10px; align-items:end; margin-bottom:14px;">
+      <div>
+        <label>Soggetto</label>
+        <select name="subject_id">
+          <option value="">— tutti —</option>
+          {% for s in subjects %}
+          <option value="{{ s.id }}" {% if s.id == subject_id %}selected{% endif %}>{{ s.code }} — {{ s.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label><input type="checkbox" name="only_overdue" value="1" {% if only_overdue %}checked{% endif %}> Solo scadute</label>
+      </div>
+      <button type="submit" class="btn">Filtra</button>
+    </form>
+
+    <form method="get" action="{{ url_for('gl.scadenzario_paga') }}">
+      <table class="masterledger-table">
+        <thead>
+          <tr><th></th><th>Documento</th><th>Soggetto</th><th>Rata</th><th>Scadenza</th><th>Importo</th><th>Residuo</th><th>Stato</th></tr>
+        </thead>
+        <tbody>
+          {% for i in installments %}
+          <tr>
+            <td><input type="checkbox" name="installment_id" value="{{ i.id }}"></td>
+            <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=i.entry.id) }}">{{ i.entry.doc_number }}</a></td>
+            <td>{{ i.entry.economic_subject.name if i.entry.economic_subject else "—" }}</td>
+            <td>{{ i.numero_rata }}</td>
+            <td>{{ i.due_date.strftime("%d/%m/%Y") }}</td>
+            <td class="mono">{{ "%.2f"|format(i.amount) }}</td>
+            <td class="mono">{{ "%.2f"|format(i.residual_amount) }}</td>
+            <td>
+              {% if i.status_label == "aperta" %}<span class="status-badge status-open">Aperta</span>
+              {% elif "scaduta" in i.status_label %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">{{ i.status_label|capitalize }}</span>
+              {% else %}<span class="status-badge status-paid">{{ i.status_label|capitalize }}</span>{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8">Nessuna rata aperta.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit" class="btn" style="margin-top:14px;">Paga/incassa le rate selezionate</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
