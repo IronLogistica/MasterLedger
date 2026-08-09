@@ -33,6 +33,13 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes")
+    # Un form di Prima Nota/Preventivo con molte righe può restare aperto a
+    # lungo (interruzioni, dati da recuperare altrove) prima dell'invio. Il
+    # default di Flask-WTF è 1 ora — troppo poco per un uso reale, causa
+    # "CSRF token has expired" su form legittimi. Allineato alla durata
+    # della sessione stessa (8 ore): il token resta valido finché resta
+    # valida la sessione dell'utente, non prima.
+    WTF_CSRF_TIME_LIMIT = 8 * 60 * 60
     REMEMBER_COOKIE_HTTPONLY = True
     REMEMBER_COOKIE_SAMESITE = "Lax"
     REMEMBER_COOKIE_SECURE = SESSION_COOKIE_SECURE
