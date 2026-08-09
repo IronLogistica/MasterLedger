@@ -8,6 +8,7 @@ evitare import circolari tra i blueprint e il modulo dei modelli.
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_migrate import Migrate
+from flask_wtf.csrf import CSRFProtect
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -15,3 +16,5 @@ login_manager = LoginManager()
 login_manager.login_view = "auth.login"
 login_manager.login_message = "Effettua l'accesso per continuare."
 login_manager.login_message_category = "warning"
+
+csrf = CSRFProtect()
