@@ -18,7 +18,7 @@
     <div class="card" style="margin-bottom:14px;">
       <div class="card-header" style="font-size:13.5px;">{{ p.doc_number }} — {{ p.party.name }} <span class="tx-code">{{ p.status|upper }}</span></div>
       <div class="card-body">
-        <form method="POST">
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="po_id" value="{{ p.id }}">
           <table class="masterledger-table" style="margin-bottom:12px;">
             <thead><tr><th>Articolo</th><th class="td-num">① Ordinato</th><th class="td-num">Prezzo ordine €</th><th class="td-num">② Ricevuto</th><th class="td-num">già Fatturato</th><th style="width:110px;">③ Q.tà fattura</th><th style="width:120px;">③ Prezzo fattura €</th></tr></thead>

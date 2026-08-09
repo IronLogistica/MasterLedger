@@ -10,7 +10,7 @@
       al <strong>prezzo ordine</strong>. Il conto transitorio EM/RF verrà chiuso dalla Verifica Fattura —
       questo è il perno del three-way match SAP.
     </div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid" style="margin-bottom:12px;">
         <div class="form-group">
           <label>Ordine d'acquisto <span class="req">*</span></label>
@@ -34,7 +34,7 @@
   <div class="card-body">
     {% if receipts %}
     <table class="masterledger-table">
-      <thead><tr><th>Numero</th><th>Data</th><th>OA</th><th>Fornitore</th><th>DDT fornitore</th><th>Scrittura</th></tr></thead>
+      <thead><tr><th>Numero</th><th>Data</th><th>OA</th><th>Fornitore</th><th>DDT fornitore</th><th>Scrittura</th><th>Storno</th></tr></thead>
       <tbody>
         {% for g in receipts %}
         <tr>
@@ -44,6 +44,19 @@
           <td>{{ g.po.party.name }}</td>
           <td>{{ g.ddt_vendor_ref or '—' }}</td>
           <td>{% if g.journal_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=g.journal_entry_id) }}">{{ g.journal_entry.doc_number }}</a>{% else %}—{% endif %}</td>
+          <td>
+            {% if g.is_reversed %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Stornata</span>
+            {% else %}
+            <details style="display:inline-block;">
+              <summary class="btn btn-ghost" style="display:inline;">Storna</summary>
+              <form method="post" action="{{ url_for('mm.goods_receipts_reverse', receipt_id=g.id) }}" style="margin-top:8px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="reason" placeholder="Motivo (obbligatorio)" required style="width:200px;">
+                <button type="submit" class="btn">Conferma</button>
+              </form>
+            </details>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
