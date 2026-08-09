@@ -209,21 +209,29 @@ def supplier_payment():
 
             total = 0
             refs = []
+            subject_ids = set()
             for eid in selected_ids:
                 inv = JournalEntry.query.get(int(eid))
                 if inv and not inv.is_paid:
                     total += float(inv.gross_amount or 0)
                     refs.append(inv.doc_number)
+                    subject_ids.add(inv.economic_subject_id)
 
             lines = [
                 {"account_id": ap_account.id, "dare": total, "avere": 0},
                 {"account_id": bank_account.id, "dare": 0, "avere": total},
             ]
+            # Il partitario individua il soggetto solo se il pagamento riguarda
+            # fatture di UN SOLO fornitore (caso normale). Se sono state pagate
+            # insieme fatture di fornitori diversi, si lascia None: comparirà
+            # comunque nel Giornale, ma non attribuibile a un partitario singolo.
+            economic_subject_id = subject_ids.pop() if len(subject_ids) == 1 else None
             payment_entry = post_journal_entry(
                 doc_type="KZ", prefix="15",
                 doc_date=None, description=f"Pagamento fornitore — {', '.join(refs)}",
                 lines=lines, source_module="LEDGER", reference=", ".join(refs),
-                created_by_id=current_user.id,
+                created_by_id=current_user.id, economic_subject_id=economic_subject_id,
+                gross_amount=total,
             )
 
             for eid in selected_ids:
