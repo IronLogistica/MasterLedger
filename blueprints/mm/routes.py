@@ -28,6 +28,7 @@ from models import (
     GoodsReceipt, GoodsReceiptLine,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.reversals import reverse_goods_receipt, ReversalError
 
 mm_bp = Blueprint("mm", __name__, template_folder="../../templates/mm")
 
@@ -168,7 +169,7 @@ def goods_receipts():
                 description=f"Entrata Merci {gr.doc_number} su OA {po.doc_number}"
                             + (f" — DDT forn. {gr.ddt_vendor_ref}" if gr.ddt_vendor_ref else ""),
                 lines=journal_lines, source_module="MAGAZZINO",
-                reference=gr.doc_number, created_by_id=current_user.id,
+                reference=gr.doc_number, created_by_id=current_user.id, commit=False,
             )
             gr.journal_entry_id = entry.id
             db.session.commit()
@@ -181,6 +182,19 @@ def goods_receipts():
 
     receipts = GoodsReceipt.query.order_by(GoodsReceipt.id.desc()).all()
     return render_template("mm/goods_receipts.html", receipts=receipts, open_pos=open_pos)
+
+
+@mm_bp.route("/goods-receipts/<int:receipt_id>/reverse", methods=["POST"])
+@login_required
+def goods_receipts_reverse(receipt_id):
+    """Fase 4 (progettazione parti mancanti, punto 4) — storno di dominio."""
+    reason = (request.form.get("reason") or "").strip()
+    try:
+        reverse_goods_receipt(receipt_id, reason, created_by_id=current_user.id)
+        flash("Entrata Merci stornata: quantità ordine ripristinate e scrittura contabile contro-mossa.", "success")
+    except ReversalError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("mm.goods_receipts"))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -286,7 +300,7 @@ def invoice_verification():
                             f"(three-way match OK)",
                 lines=journal_lines, source_module="ACQUISTI",
                 reference=invoice_ref or po.doc_number, created_by_id=current_user.id,
-                economic_subject_id=po.economic_subject_id, gross_amount=gross,
+                economic_subject_id=po.economic_subject_id, gross_amount=gross, commit=False,
             )
             db.session.commit()
             flash(f"✅ Three-way match superato. Fattura {entry.doc_number} registrata — "
