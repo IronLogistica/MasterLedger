@@ -3,10 +3,12 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, CostCenter, JournalEntry, EconomicSubject
+from models import Account, CostCenter, JournalEntry, JournalLine, EconomicSubject
 from services.posting import post_journal_entry, reverse_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
 from services.ai_posting import suggerisci_scrittura, estrai_testo_pdf, AISuggestionError
+from services.classificazione_operazioni import classifica, guida_per_classe, CLASSI_OPERAZIONE
+from services.rettifiche_operazioni import classifica_rettifica, guida_per_rettifica, CATALOGO_RETTIFICHE
 
 gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
 
@@ -122,6 +124,97 @@ def piano_conti():
                            etichette_tipo=etichette_tipo, totale=len(accounts))
 
 
+@gl_bp.route("/mastrino/<int:account_id>")
+@login_required
+def mastrino_conto(account_id):
+    """Mastrino di conto — tutti i movimenti (righe di Prima Nota) su un
+    singolo conto, in ordine cronologico, con saldo progressivo. È la
+    'scheda di conto' vera e propria: senza questa vista i movimenti
+    esistono nel DB (JournalLine.account_id) ma non sono consultabili per
+    conto, solo per documento nel Giornale.
+    """
+    account = Account.query.get_or_404(account_id)
+
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
+
+    query = (JournalLine.query
+             .join(JournalEntry)
+             .filter(JournalLine.account_id == account_id))
+    if date_from:
+        try:
+            query = query.filter(JournalEntry.doc_date >= datetime.strptime(date_from, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            query = query.filter(JournalEntry.doc_date <= datetime.strptime(date_to, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+
+    righe = query.order_by(JournalEntry.doc_date.asc(), JournalEntry.id.asc()).all()
+
+    movimenti = []
+    saldo = 0.0
+    for r in righe:
+        dare = float(r.dare or 0)
+        avere = float(r.avere or 0)
+        saldo += dare - avere
+        movimenti.append({
+            "entry": r.entry,
+            "dare": dare,
+            "avere": avere,
+            "saldo_progressivo": saldo,
+            "cost_center": r.cost_center,
+        })
+
+    totale_dare = sum(m["dare"] for m in movimenti)
+    totale_avere = sum(m["avere"] for m in movimenti)
+
+    return render_template("gl/mastrino_conto.html", account=account, movimenti=movimenti,
+                           totale_dare=totale_dare, totale_avere=totale_avere, saldo_finale=saldo,
+                           filters={"date_from": date_from, "date_to": date_to})
+
+
+@gl_bp.route("/partitario/<int:economic_subject_id>")
+@login_required
+def partitario(economic_subject_id):
+    """Partitario individuale cliente/fornitore — tutti i documenti (fatture,
+    pagamenti/incassi, note credito) legati a questo soggetto economico, con
+    stato aperto/pagato/stornato e saldo residuo. Fino ad oggi l'unico modo
+    di vedere la posizione di un cliente/fornitore era filtrare il Giornale
+    per controparte: qui invece si vede la partita, non solo l'elenco.
+    """
+    party = EconomicSubject.query.get_or_404(economic_subject_id)
+
+    entries = (JournalEntry.query
+               .filter(JournalEntry.economic_subject_id == economic_subject_id)
+               .order_by(JournalEntry.doc_date.asc(), JournalEntry.id.asc())
+               .all())
+
+    documenti = []
+    saldo_aperto = 0.0
+    for e in entries:
+        # segno: le fatture cliente (DR) e i documenti che aumentano il credito verso
+        # il soggetto contano "a debito" per il partitario (lui ci deve pagare),
+        # incassi/pagamenti/note credito lo riducono — usiamo gross_amount se
+        # presente (importo lordo documento), altrimenti il totale Dare del documento.
+        importo = float(e.gross_amount) if e.gross_amount is not None else e.total_dare
+        segno = -1 if e.doc_type in ("KZ", "DZ") else 1  # pagamento/incasso riduce l'aperto
+        if e.doc_type == "DG":  # nota di credito
+            segno = -1
+        if not e.is_reversed:
+            saldo_aperto += segno * importo if not e.is_paid else 0
+        documenti.append({
+            "entry": e,
+            "importo": importo,
+            "stato": "Stornato" if e.is_reversed else ("Pagato/Incassato" if e.is_paid else "Aperto"),
+        })
+
+    return render_template("gl/partitario.html", party=party, documenti=documenti,
+                           saldo_aperto=saldo_aperto, doc_type_labels=DOC_TYPE_LABELS)
+
+
 @gl_bp.route("/entry/<int:entry_id>")
 @login_required
 def entry_detail(entry_id):
@@ -228,10 +321,52 @@ def ai_suggerisci():
         return jsonify({"error": "Descrivi l'operazione oppure carica un documento PDF."}), 400
 
     accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
+    code_to_name = {a.code: a.name for a in accounts}
+
+    # Classificazione deterministica (a regole, non AI) del documento in una
+    # classe nota di operazione — se riconosciuta, restringe l'AI ai conti
+    # esatti di quella classe invece di lasciarla scegliere su tutto il
+    # piano dei conti. Se il documento non rientra in nessuna classe nota,
+    # o la classe non ha uno schema fisso (es. rettifica generica), si
+    # procede comunque con l'AI generica ma si segnala l'incertezza.
+    testo_da_classificare = f"{descrizione}\n{testo_documento or ''}"
+    classe_chiave, confidenza_classe = classifica(testo_da_classificare)
+    guida_extra = None
+    contatta_commercialista = False
+    motivo_alert = None
+    classe_nome = None
+    rettifica_chiave = None
+
+    if classe_chiave and not CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
+        # una delle classi ordinarie riconosciuta con schema fisso
+        classe_nome = CLASSI_OPERAZIONE[classe_chiave]["nome"]
+        if confidenza_classe >= 0.6:
+            guida_extra = guida_per_classe(classe_chiave, code_to_name)
+    else:
+        # non è una delle ordinarie (o è RETTIFICA_GENERICA): prova il
+        # catalogo dettagliato delle rettifiche (37 sottoclassi A1-H3)
+        rettifica_chiave, confidenza_rettifica = classifica_rettifica(testo_da_classificare)
+        if rettifica_chiave:
+            sc = CATALOGO_RETTIFICHE[rettifica_chiave]
+            classe_nome = f"{rettifica_chiave} — {sc['nome']}"
+            if confidenza_rettifica >= 0.6:
+                guida_extra = guida_per_rettifica(rettifica_chiave, code_to_name)
+            if sc.get("conto_mancante"):
+                contatta_commercialista = True
+                motivo_alert = (f"Sottoclasse '{sc['nome']}' richiede un conto che non esiste "
+                                 f"ancora nel piano dei conti: nessuna proposta completa possibile.")
+            elif sc["livello"] == "M":
+                contatta_commercialista = True
+                motivo_alert = (f"Sottoclasse '{sc['nome']}' è di livello M (sempre manuale): "
+                                 f"richiede giudizio professionale specifico, non solo il click "
+                                 f"di conferma ordinario.")
+        else:
+            contatta_commercialista = True
+            motivo_alert = "Documento non riconducibile a nessuna classe o sottoclasse nota."
 
     try:
         suggerimento = suggerisci_scrittura(descrizione, accounts, testo_documento=testo_documento,
-                                             tipo_documento=tipo_documento)
+                                             tipo_documento=tipo_documento, guida_extra=guida_extra)
     except AISuggestionError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -241,6 +376,30 @@ def ai_suggerisci():
     code_to_id = {a.code: a.id for a in accounts}
     righe_risolte = []
     avvisi = []
+    if guida_extra and classe_chiave and not CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
+        conti_ammessi_classe = set(
+            CLASSI_OPERAZIONE[classe_chiave].get("dare_fissi", []) +
+            CLASSI_OPERAZIONE[classe_chiave].get("dare_variabili", []) +
+            CLASSI_OPERAZIONE[classe_chiave].get("avere_fissi", []) +
+            CLASSI_OPERAZIONE[classe_chiave].get("avere_variabili", [])
+        )
+        for line in suggerimento.get("lines", []):
+            if str(line.get("account_code", "")).strip() not in conti_ammessi_classe:
+                contatta_commercialista = True
+                motivo_alert = (f"L'AI ha proposto un conto fuori dallo schema della classe "
+                                 f"'{classe_nome}'.")
+                break
+    elif guida_extra and rettifica_chiave:
+        conti_ammessi_rettifica = set()
+        for variante in CATALOGO_RETTIFICHE[rettifica_chiave].get("schema", []):
+            for riga in variante:
+                conti_ammessi_rettifica.add(riga["conto"])
+        for line in suggerimento.get("lines", []):
+            if str(line.get("account_code", "")).strip() not in conti_ammessi_rettifica:
+                contatta_commercialista = True
+                motivo_alert = (f"L'AI ha proposto un conto fuori dallo schema della sottoclasse "
+                                 f"'{classe_nome}'.")
+                break
     for line in suggerimento.get("lines", []):
         code = str(line.get("account_code", "")).strip()
         acc_id = code_to_id.get(code)
@@ -262,9 +421,19 @@ def ai_suggerisci():
         return jsonify({"error": "Dopo aver verificato i conti proposti, non restano abbastanza righe valide. "
                                   "Prova a riformulare la richiesta.", "avvisi": avvisi}), 400
 
+    totale_dare = sum(r["amount"] for r in righe_risolte if r["pk"] == "40")
+    totale_avere = sum(r["amount"] for r in righe_risolte if r["pk"] == "50")
+    if abs(totale_dare - totale_avere) > 0.01:
+        contatta_commercialista = True
+        motivo_alert = (f"La proposta non pareggia (Dare {totale_dare:.2f} / Avere {totale_avere:.2f}): "
+                         f"verificare con il commercialista prima di registrare.")
+
     return jsonify({
         "description": suggerimento.get("description") or descrizione,
         "lines": righe_risolte,
         "note": suggerimento.get("note"),
         "avvisi": avvisi,
+        "classe_operazione": classe_nome,
+        "contatta_commercialista": contatta_commercialista,
+        "motivo_alert": motivo_alert,
     })
