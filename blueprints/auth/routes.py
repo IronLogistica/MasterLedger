@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_user, logout_user, login_required, current_user
+from urllib.parse import urlsplit
 
 from extensions import db
 from models import User
@@ -28,12 +29,15 @@ def login():
         login_user(user, remember=True)
         flash(f"Benvenuto/a, {user.full_name}.", "success")
         next_page = request.args.get("next")
+        # Accetta solo destinazioni relative locali: evita open redirect dopo il login.
+        if next_page and (urlsplit(next_page).netloc or not next_page.startswith("/")):
+            next_page = None
         return redirect(next_page or url_for("dashboard.home"))
 
     return render_template("auth/login.html")
 
 
-@auth_bp.route("/logout")
+@auth_bp.route("/logout", methods=["POST"])
 @login_required
 def logout():
     logout_user()
