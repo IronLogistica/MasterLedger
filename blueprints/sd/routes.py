@@ -371,9 +371,15 @@ def billing():
                 total_net += net
                 total_vat += vat
                 journal_lines.append({"account_id": rev_acc.id, "dare": 0, "avere": net,
-                                      "description": f"{l.material.code} — {l.material.description}"})
-                inv_rows.append((f"{l.material.code} — {l.material.description} "
-                                 f"({float(l.qty):.0f} {l.material.uom} × {float(l.price):.2f} €)",
+                                      "description": f"{l.material.code} - {l.material.description}"})
+                # Caratteri ASCII semplici SOLO qui: questa stringa finisce
+                # verbatim nel campo <Descrizione> dell'XML FatturaPA (vedi
+                # services/fatturapa.py). Em-dash (—), simbolo moltiplicazione
+                # (×) e simbolo euro (€) sono stati respinti da fatturacheck.it
+                # come "caratteri non validi" — meglio trattino, "x" e nessun
+                # simbolo valuta (l'importo è già in colonna a parte).
+                inv_rows.append((f"{l.material.code} - {l.material.description} "
+                                 f"({float(l.qty):.0f} {l.material.uom} x {float(l.price):.2f})",
                                  net, Decimal(str(l.material.vat_rate))))
             gross = total_net + total_vat
             journal_lines.insert(0, {"account_id": ar_acc.id, "dare": gross, "avere": 0})
