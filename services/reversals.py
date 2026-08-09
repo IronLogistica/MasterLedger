@@ -1,0 +1,117 @@
+"""
+services/reversals.py — Fase 4 (progettazione parti mancanti, punto 4):
+storni completi di magazzino e produzione.
+
+STATO REALE DELL'INTEGRAZIONE WMS (verificato in services/logistic_client.py):
+oggi MasterLedger SOLO LEGGE da MasterLogistic-WMS, non scrive ancora la
+giacenza — `sposta_stock` esiste ma non è richiamata da nessuna rotta. Gli
+storni qui sotto sono quindi già completi e atomici per lo stato REALE del
+sistema (documento + quantità locali + scrittura contabile, un'unica
+transazione). Il giorno in cui MasterLedger inizierà a scrivere su WMS (dal
+carico dell'entrata merci, non dal suo storno), la stessa cautela va
+applicata anche qui: chiave idempotente, stato esplicito in caso di errore
+di rete, riconciliazione periodica — NON una sezione critica bloccante,
+perché il pattern read-modify-write di sposta_stock già lo richiede.
+"""
+from datetime import datetime
+
+from extensions import db
+from models import GoodsReceipt, PurchaseOrderLine, Delivery, SalesOrderLine
+from services.posting import _reverse_gl_only, PeriodClosedError
+
+
+class ReversalError(ValueError):
+    """Violazione di un vincolo di storno: dipendenza a valle non stornata,
+    documento già stornato, o quantità coinvolta incoerente."""
+
+
+def reverse_goods_receipt(receipt_id, reason, created_by_id=None):
+    """Storna un'Entrata Merci: contro-movimento GL (chiude Magazzino,
+    riapre EM/RF) + ripristino di qty_received sulle righe ordine — stessa
+    transazione, o tutto o niente.
+
+    Bloccato se una qualsiasi riga ricevuta è già stata (anche solo in
+    parte) verificata in fattura (MIRO): va prima stornata la Verifica
+    Fattura corrispondente, nell'ordine inverso a come sono stati creati.
+    """
+    if not reason or not reason.strip():
+        raise ReversalError("Il motivo dello storno è obbligatorio.")
+
+    receipt = GoodsReceipt.query.get(receipt_id)
+    if receipt is None:
+        raise ReversalError("Entrata Merci non trovata.")
+    if receipt.is_reversed:
+        raise ReversalError("Questa Entrata Merci è già stata stornata.")
+    if receipt.journal_entry_id is None:
+        raise ReversalError("Entrata Merci senza scrittura contabile collegata — dato incoerente.")
+
+    # Blocco a catena: nessuna riga di questa GR può risultare già fatturata
+    # oltre la quantità che RESTEREBBE ricevuta dopo lo storno.
+    blocked = []
+    for gr_line in receipt.lines:
+        po_line = gr_line.po_line
+        residual_after = po_line.qty_received - gr_line.qty
+        if po_line.qty_invoiced > residual_after:
+            blocked.append(
+                f"{po_line.material.code}: già fatturati {float(po_line.qty_invoiced):.0f}, "
+                f"ma dopo lo storno resterebbero ricevuti solo {float(residual_after):.0f} — "
+                f"storna prima la Verifica Fattura collegata."
+            )
+    if blocked:
+        raise ReversalError("Impossibile stornare — " + "; ".join(blocked))
+
+    try:
+        new_entry = _reverse_gl_only(receipt.journal_entry, created_by_id=created_by_id)
+        for gr_line in receipt.lines:
+            gr_line.po_line.qty_received -= gr_line.qty
+        receipt.is_reversed = True
+        receipt.reversal_reason = reason.strip()
+        receipt.reversed_at = datetime.utcnow()
+        receipt.reversed_by_id = created_by_id
+        db.session.commit()
+        return new_entry
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def reverse_delivery(delivery_id, reason, created_by_id=None):
+    """Storna un DDT: contro-movimento GL del Costo del Venduto + ripristino
+    di qty_delivered sull'ordine cliente — stessa transazione.
+
+    Bloccato se il DDT è già stato fatturato al cliente (billing_entry_id
+    valorizzato): va prima stornata la fattura, nell'ordine inverso a come
+    sono stati creati.
+    """
+    if not reason or not reason.strip():
+        raise ReversalError("Il motivo dello storno è obbligatorio.")
+
+    delivery = Delivery.query.get(delivery_id)
+    if delivery is None:
+        raise ReversalError("DDT non trovato.")
+    if delivery.is_reversed:
+        raise ReversalError("Questo DDT è già stato stornato.")
+    if delivery.billing_entry_id is not None:
+        raise ReversalError(
+            "Questo DDT è già stato fatturato al cliente — storna prima la fattura collegata."
+        )
+    if delivery.cogs_entry_id is None:
+        raise ReversalError("DDT senza scrittura di Costo del Venduto collegata — dato incoerente.")
+
+    try:
+        new_entry = _reverse_gl_only(delivery.cogs_entry, created_by_id=created_by_id)
+        for dl_line in delivery.lines:
+            so_line = SalesOrderLine.query.filter_by(
+                order_id=delivery.order_id, material_id=dl_line.material_id
+            ).first()
+            if so_line is not None:
+                so_line.qty_delivered -= dl_line.qty
+        delivery.is_reversed = True
+        delivery.reversal_reason = reason.strip()
+        delivery.reversed_at = datetime.utcnow()
+        delivery.reversed_by_id = created_by_id
+        db.session.commit()
+        return new_entry
+    except Exception:
+        db.session.rollback()
+        raise
