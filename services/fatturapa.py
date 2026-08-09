@@ -116,10 +116,39 @@ def _next_progressivo_invio():
     return out.rjust(5, "0")
 
 
+# Caratteri tipografici comuni (spesso incollati da Word/email) che lo SdI
+# e i validatori come fatturacheck.it respingono come "non validi" —
+# sostituiti con l'equivalente ASCII semplice prima di finire in QUALSIASI
+# campo testo dell'XML. Non è solo il simbolo dell'euro o il trattino lungo:
+# includiamo anche virgolette tipografiche e trattini alternativi, stessa
+# origine tipica (copia-incolla da Word).
+_CARATTERI_NON_SICURI = {
+    "\u2014": "-",   # — em dash
+    "\u2013": "-",   # – en dash
+    "\u2018": "'", "\u2019": "'",   # ' ' apici tipografici
+    "\u201c": '"', "\u201d": '"',   # " " virgolette tipografiche
+    "\u00a0": " ",   # spazio non-interrompibile
+    "\u20ac": "EUR",  # € — l'importo è già in un campo numerico a parte
+    "\u00d7": "x",   # × segno di moltiplicazione
+    "\u2026": "...",  # … puntini di sospensione
+}
+
+
+def _testo_sicuro(text):
+    """Sanifica un testo prima di scriverlo in un campo XML FatturaPA —
+    vedi _CARATTERI_NON_SICURI sopra per il perché."""
+    if text is None:
+        return text
+    text = str(text)
+    for carattere, sostituto in _CARATTERI_NON_SICURI.items():
+        text = text.replace(carattere, sostituto)
+    return text
+
+
 def _sub(parent, tag, text=None):
     el = ET.SubElement(parent, tag)
     if text is not None:
-        el.text = str(text)
+        el.text = _testo_sicuro(text)
     return el
 
 
