@@ -28,6 +28,7 @@ from models import (
     JournalEntry,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.reversals import reverse_delivery, ReversalError
 from services.logistic_client import get_stock, LogisticError
 
 sd_bp = Blueprint("sd", __name__, template_folder="../../templates/sd")
@@ -264,7 +265,7 @@ def deliveries():
                     doc_type="SA", prefix="10", doc_date=None,
                     description=f"Uscita merci DDT {d.doc_number} (ord. {o.doc_number}) — Costo del Venduto",
                     lines=journal_lines, source_module="VENDITE",
-                    reference=d.doc_number, created_by_id=current_user.id,
+                    reference=d.doc_number, created_by_id=current_user.id, commit=False,
                 )
                 d.cogs_entry_id = entry.id
 
@@ -281,6 +282,19 @@ def deliveries():
     delivery_list = Delivery.query.order_by(Delivery.id.desc()).all()
     return render_template("sd/deliveries.html", deliveries=delivery_list,
                            open_orders=open_orders)
+
+
+@sd_bp.route("/deliveries/<int:delivery_id>/reverse", methods=["POST"])
+@login_required
+def deliveries_reverse(delivery_id):
+    """Fase 4 (progettazione parti mancanti, punto 4) — storno di dominio."""
+    reason = (request.form.get("reason") or "").strip()
+    try:
+        reverse_delivery(delivery_id, reason, created_by_id=current_user.id)
+        flash("DDT stornato: quantità ordine ripristinate e Costo del Venduto contro-mosso.", "success")
+    except ReversalError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("sd.deliveries"))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -346,7 +360,7 @@ def billing():
                 lines=journal_lines, source_module="VENDITE",
                 reference=d.doc_number, created_by_id=current_user.id,
                 economic_subject_id=d.economic_subject_id, gross_amount=gross,
-                vat_rate=(vat_rates.pop() if len(vat_rates) == 1 else None),
+                vat_rate=(vat_rates.pop() if len(vat_rates) == 1 else None), commit=False,
             )
             for n, (desc, net, rate) in enumerate(inv_rows, start=1):
                 db.session.add(InvoiceLine(entry_id=entry.id, line_number=n, description=desc,
