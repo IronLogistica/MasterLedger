@@ -1,11 +1,14 @@
 from datetime import datetime
+from decimal import Decimal
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, CostCenter, EconomicSubject, JournalEntry
+from models import Account, AccountMapping, CostCenter, EconomicSubject, JournalEntry
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
+from services.payments import create_installments_for_invoice, allocate_payment, PaymentAllocationError
+from models import InvoiceInstallment
 
 ap_bp = Blueprint("ap", __name__, template_folder="../../templates/ap")
 
@@ -43,8 +46,8 @@ def supplier_invoice():
             return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts, cost_centers=cost_centers)
 
         try:
-            ap_account = _get_account_by_code("210000")   # Debiti v/Fornitori
-            vat_account = _get_account_by_code("154000")  # IVA a Credito
+            ap_account = AccountMapping.get_or_error("debiti_fornitori")
+            vat_account = AccountMapping.get_or_error("iva_credito")
             expense_account, cost_center = validate_co_assignment(expense_account_id, cost_center_id)
 
             lines = [
@@ -59,10 +62,14 @@ def supplier_invoice():
                 doc_date=invoice_date, description=description or f"Fattura Fornitore {invoice_number}",
                 lines=lines, source_module="LEDGER", reference=invoice_number,
                 created_by_id=current_user.id, economic_subject_id=vendor_id, gross_amount=gross,
+                commit=False,
             )
+            create_installments_for_invoice(entry)
+            db.session.commit()
             flash(f"Fattura fornitore registrata: Doc. {entry.doc_number} — Totale {gross:.2f} €.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
         except (UnbalancedEntryError, ValueError, COValidationError) as e:
+            db.session.rollback()
             flash(str(e), "danger")
 
     return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts, cost_centers=cost_centers)
@@ -96,8 +103,8 @@ def supplier_invoice_import():
             flash("Seleziona il conto di costo.", "danger")
             return redirect(url_for("ap.supplier_invoice_import"))
         try:
-            ap_account = _get_account_by_code("210000")   # Debiti v/Fornitori
-            vat_account = _get_account_by_code("154000")  # IVA a Credito
+            ap_account = AccountMapping.get_or_error("debiti_fornitori")
+            vat_account = AccountMapping.get_or_error("iva_credito")
             expense_account, cost_center = validate_co_assignment(expense_account_id, cost_center_id)
 
             piva = request.form.get("cedente_piva", "").strip()
@@ -145,8 +152,15 @@ def supplier_invoice_import():
                 doc_date=invoice_date,
                 description=descr or f"{label} {numero} — {denominazione}",
                 lines=lines, source_module="LEDGER", reference=numero,
-                created_by_id=current_user.id, economic_subject_id=vendor.id, gross_amount=gross,
+                created_by_id=current_user.id, economic_subject_id=vendor.id, gross_amount=(-gross if tipo_doc == "TD04" else gross),
+                commit=False,
             )
+            if tipo_doc != "TD04":
+                # Le note di credito fornitore (TD04, importo negativo) si compensano
+                # direttamente in blocco — niente rate: una rata a importo negativo
+                # non avrebbe senso nel modello di scadenzario.
+                create_installments_for_invoice(entry)
+            db.session.commit()
             flash(f"{label} importata da XML: Doc. {entry.doc_number} — "
                   f"{denominazione}, n. {numero}, totale {gross:.2f} €.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
@@ -198,52 +212,57 @@ def supplier_payment():
                      .all())
 
     if request.method == "POST":
-        selected_ids = request.form.getlist("invoice_ids[]")
+        raw_ids = request.form.getlist("invoice_ids[]")
+        try:
+            selected_ids = {int(value) for value in raw_ids}
+        except (TypeError, ValueError):
+            selected_ids = set()
         if not selected_ids:
             flash("Seleziona almeno una fattura da pagare.", "warning")
             return redirect(url_for("ap.supplier_payment"))
 
         try:
-            ap_account = _get_account_by_code("210000")
-            bank_account = _get_account_by_code("180000")  # Banca c/c
+            invoices = (JournalEntry.query
+                        .filter(JournalEntry.id.in_(selected_ids), JournalEntry.doc_type == "KR",
+                                JournalEntry.is_paid.is_(False), JournalEntry.is_reversed.is_(False))
+                        .all())
+            if len(invoices) != len(selected_ids):
+                raise ValueError("La selezione contiene documenti non validi, già chiusi o stornati.")
+            subject_ids = {inv.economic_subject_id for inv in invoices}
+            if None in subject_ids or len(subject_ids) != 1:
+                raise ValueError("Compensare in un unico pagamento solo documenti dello stesso fornitore.")
 
-            total = 0
-            refs = []
-            subject_ids = set()
-            for eid in selected_ids:
-                inv = JournalEntry.query.get(int(eid))
-                if inv and not inv.is_paid:
-                    total += float(inv.gross_amount or 0)
-                    refs.append(inv.doc_number)
-                    subject_ids.add(inv.economic_subject_id)
-
-            lines = [
-                {"account_id": ap_account.id, "dare": total, "avere": 0},
-                {"account_id": bank_account.id, "dare": 0, "avere": total},
-            ]
-            # Il partitario individua il soggetto solo se il pagamento riguarda
-            # fatture di UN SOLO fornitore (caso normale). Se sono state pagate
-            # insieme fatture di fornitori diversi, si lascia None: comparirà
-            # comunque nel Giornale, ma non attribuibile a un partitario singolo.
-            economic_subject_id = subject_ids.pop() if len(subject_ids) == 1 else None
+            ap_account = AccountMapping.get_or_error("debiti_fornitori")
+            bank_account = AccountMapping.get_or_error("banca_principale")
+            total = sum((Decimal(str(inv.gross_amount or 0)) for inv in invoices), Decimal("0"))
+            if total <= 0:
+                raise ValueError("Il netto da pagare, dopo le note di credito, deve essere positivo.")
+            refs = [inv.doc_number for inv in invoices]
+            economic_subject_id = next(iter(subject_ids))
             payment_entry = post_journal_entry(
-                doc_type="KZ", prefix="15",
-                doc_date=None, description=f"Pagamento fornitore — {', '.join(refs)}",
-                lines=lines, source_module="LEDGER", reference=", ".join(refs),
+                doc_type="KZ", prefix="15", doc_date=None,
+                description=f"Pagamento fornitore — {', '.join(refs)}",
+                lines=[
+                    {"account_id": ap_account.id, "dare": total, "avere": 0},
+                    {"account_id": bank_account.id, "dare": 0, "avere": total},
+                ],
+                source_module="LEDGER", reference=", ".join(refs),
                 created_by_id=current_user.id, economic_subject_id=economic_subject_id,
-                gross_amount=total,
+                gross_amount=total, commit=False,
             )
-
-            for eid in selected_ids:
-                inv = JournalEntry.query.get(int(eid))
-                if inv:
-                    inv.is_paid = True
-                    inv.paid_by_entry_id = payment_entry.id
+            for inv in invoices:
+                inv.is_paid = True
+                inv.paid_by_entry_id = payment_entry.id
+                # Sincronizza le rate (Fase 3): un pagamento a saldo pieno da
+                # questa vista chiude anche lo Scadenzario, non solo il flag.
+                for inst in InvoiceInstallment.query.filter_by(entry_id=inv.id).all():
+                    inst.residual_amount = 0
             db.session.commit()
-
-            flash(f"Pagamento registrato: Doc. {payment_entry.doc_number} — Totale {total:.2f} €. {len(refs)} fatture compensate.", "success")
+            flash(f"Pagamento registrato: Doc. {payment_entry.doc_number} — Totale {total:.2f} €. "
+                  f"{len(invoices)} documenti compensati.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=payment_entry.id))
         except (UnbalancedEntryError, ValueError) as e:
+            db.session.rollback()
             flash(str(e), "danger")
 
     return render_template("ap/supplier_payment.html", open_invoices=open_invoices)
