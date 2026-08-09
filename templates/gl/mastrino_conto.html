@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span>📒</span> Mastrino — <span class="mono">{{ account.code }}</span> {{ account.name }}
+    <span class="tx-code">{{ movimenti|length }} movimenti</span>
+  </div>
+  <div class="card-body">
+    <div class="info-box">
+      Tutti i movimenti registrati su questo conto (da qualunque modulo — Prima Nota, SD, MM, Paghe, Cespiti),
+      in ordine cronologico, con saldo progressivo. Ogni riga rimanda al documento di Prima Nota che l'ha generata.
+    </div>
+
+    <form method="get" style="margin:14px 0; display:flex; gap:10px; align-items:end;">
+      <div>
+        <label>Da data</label>
+        <input type="date" name="date_from" value="{{ filters.date_from or '' }}">
+      </div>
+      <div>
+        <label>A data</label>
+        <input type="date" name="date_to" value="{{ filters.date_to or '' }}">
+      </div>
+      <button type="submit" class="btn">Filtra</button>
+      <a href="{{ url_for('gl.mastrino_conto', account_id=account.id) }}" class="btn btn-secondary">Azzera</a>
+    </form>
+
+    <table class="masterledger-table">
+      <thead>
+        <tr>
+          <th>Data</th><th>Documento</th><th>Descrizione</th><th>Modulo</th>
+          <th>Dare</th><th>Avere</th><th>Saldo progressivo</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in movimenti %}
+        <tr>
+          <td>{{ m.entry.doc_date.strftime("%d/%m/%Y") }}</td>
+          <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=m.entry.id) }}">{{ m.entry.doc_number }}</a></td>
+          <td>{{ m.entry.description or "" }}</td>
+          <td>{{ m.entry.source_module }}</td>
+          <td class="mono">{{ "%.2f"|format(m.dare) if m.dare else "" }}</td>
+          <td class="mono">{{ "%.2f"|format(m.avere) if m.avere else "" }}</td>
+          <td class="mono"><strong>{{ "%.2f"|format(m.saldo_progressivo) }}</strong></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">Nessun movimento su questo conto{{ " nel periodo selezionato" if filters.date_from or filters.date_to else "" }}.</td></tr>
+        {% endfor %}
+      </tbody>
+      {% if movimenti %}
+      <tfoot>
+        <tr>
+          <td colspan="4"><strong>Totali</strong></td>
+          <td class="mono"><strong>{{ "%.2f"|format(totale_dare) }}</strong></td>
+          <td class="mono"><strong>{{ "%.2f"|format(totale_avere) }}</strong></td>
+          <td class="mono"><strong>{{ "%.2f"|format(saldo_finale) }}</strong></td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+</div>
+{% endblock %}

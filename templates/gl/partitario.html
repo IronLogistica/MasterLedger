@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">
+    <span>🗂️</span> Partitario — {{ party.code }} {{ party.name }} <span class="tx-code">{{ party.role_label }}</span>
+  </div>
+  <div class="card-body">
+    <div class="info-box">
+      Tutti i documenti contabili legati a questo soggetto (fatture, note credito, pagamenti/incassi),
+      con lo stato di ciascuno. Saldo aperto = quanto risulta ancora da pagare/incassare sui documenti non stornati e non ancora compensati.
+    </div>
+
+    <p><strong>Saldo aperto residuo:</strong> <span class="mono">{{ "%.2f"|format(saldo_aperto) }} €</span></p>
+
+    <table class="masterledger-table">
+      <thead>
+        <tr><th>Data</th><th>Documento</th><th>Tipo</th><th>Descrizione</th><th>Importo</th><th>Stato</th></tr>
+      </thead>
+      <tbody>
+        {% for d in documenti %}
+        <tr>
+          <td>{{ d.entry.doc_date.strftime("%d/%m/%Y") }}</td>
+          <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=d.entry.id) }}">{{ d.entry.doc_number }}</a></td>
+          <td>{{ doc_type_labels.get(d.entry.doc_type, d.entry.doc_type) }}</td>
+          <td>{{ d.entry.description or "" }}</td>
+          <td class="mono">{{ "%.2f"|format(d.importo) }}</td>
+          <td>
+            {% if d.stato == "Aperto" %}<span class="status-badge status-open">Aperto</span>
+            {% elif d.stato == "Stornato" %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Stornato</span>
+            {% else %}<span class="status-badge status-paid">Pagato/Incassato</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">Nessun documento registrato per questo soggetto.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

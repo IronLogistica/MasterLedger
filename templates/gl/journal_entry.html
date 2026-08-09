@@ -184,7 +184,14 @@ async function suggerisciAI() {
     const descInput = document.querySelector('input[name="description"]');
     if (descInput && !descInput.value) descInput.value = data.description;
 
-    let msg = '<span style="color:var(--ml-green);">✅ Righe proposte — controllale prima di registrare.</span>';
+    let msg;
+    if (data.contatta_commercialista) {
+      msg = '<span style="color:var(--ml-red);">⚠️ CONTATTA IL COMMERCIALISTA prima di registrare.</span>';
+      if (data.motivo_alert) msg += `<br><em>${data.motivo_alert}</em>`;
+    } else {
+      msg = '<span style="color:var(--ml-green);">✅ Righe proposte — controllale prima di registrare.</span>';
+    }
+    if (data.classe_operazione) msg += `<br><strong>Classe riconosciuta:</strong> ${data.classe_operazione}`;
     if (data.note) msg += `<br><em>Nota AI: ${data.note}</em>`;
     if (data.avvisi && data.avvisi.length) msg += `<br><span style="color:#b8860b;">${data.avvisi.join('<br>')}</span>`;
     esito.innerHTML = msg;

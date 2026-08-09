@@ -17,8 +17,8 @@
       <tbody>
         {% for a in gruppi[tipo] %}
         <tr {{ 'style="opacity:.5;"' if not a.active }}>
-          <td class="mono">{{ a.code }}</td>
-          <td>{{ a.name }}</td>
+          <td class="mono"><a href="{{ url_for('gl.mastrino_conto', account_id=a.id) }}">{{ a.code }}</a></td>
+          <td><a href="{{ url_for('gl.mastrino_conto', account_id=a.id) }}">{{ a.name }}</a></td>
           <td>{% if a.cost_relevant %}<span class="status-badge status-paid">{{ a.cost_relevant_type }}</span>{% else %}—{% endif %}</td>
           <td>{% if a.active %}<span class="status-badge status-paid">Attivo</span>{% else %}<span class="status-badge status-open">Disattivo</span>{% endif %}</td>
         </tr>
