@@ -6,7 +6,8 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, EconomicSubject, JournalEntry, InvoiceLine
+from models import Account, AccountMapping, EconomicSubject, JournalEntry, InvoiceLine, InvoiceInstallment
+from services.payments import create_installments_for_invoice, allocate_payment, PaymentAllocationError
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.fatturapa import build_fatturapa_xml, FatturaPAConfigError
 
@@ -73,6 +74,8 @@ def _parse_invoice_lines(form):
     accounts = form.getlist("line_account_id[]")
 
     rows, errors = [], []
+    if not (len(descs) == len(nets) == len(rates) == len(naturas) == len(accounts)):
+        return [], ["Righe fattura incomplete o alterate."]
     for i in range(len(descs)):
         desc = (descs[i] or "").strip()
         net_raw = (nets[i] or "").strip() if i < len(nets) else ""
@@ -91,8 +94,10 @@ def _parse_invoice_lines(form):
             continue
         try:
             rate = Decimal((rates[i] or "0").strip())
-        except Exception:
-            errors.append(f"Riga {i+1}: aliquota non valida.")
+            if not rate.is_finite() or rate < 0 or rate > 100:
+                raise ValueError
+        except (ArithmeticError, ValueError):
+            errors.append(f"Riga {i+1}: aliquota non valida (ammessa da 0 a 100).")
             continue
         natura = (naturas[i] or "").strip() if i < len(naturas) else ""
         natura = natura or None
@@ -106,8 +111,11 @@ def _parse_invoice_lines(form):
             natura = None
         try:
             account_id = int(accounts[i])
-        except Exception:
-            errors.append(f"Riga {i+1}: seleziona il conto di ricavo.")
+            account = db.session.get(Account, account_id)
+            if account is None or not account.active or account.account_type != "ricavo":
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append(f"Riga {i+1}: seleziona un conto di ricavo attivo.")
             continue
         rows.append({"description": desc, "amount": amount, "vat_rate": rate,
                      "natura": natura, "account_id": account_id})
@@ -160,8 +168,9 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
     description = form.get("description", "").strip()
     linked_invoice_id = form.get("linked_invoice_id", type=int)  # solo Nota di credito cliente
 
-    if not customer_id:
-        flash("Seleziona il cliente.", "danger")
+    customer = db.session.get(EconomicSubject, customer_id) if customer_id else None
+    if customer is None or not customer.active or not customer.is_customer:
+        flash("Seleziona un cliente attivo e valido.", "danger")
         return render_template(template, **ctx)
 
     rows, errors = _parse_invoice_lines(form)
@@ -176,8 +185,8 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
     gross = total_net + total_vat
 
     try:
-        ar_account = _get_account_by_code("140000")   # Crediti v/Clienti
-        vat_account = _get_account_by_code("170000")  # IVA a Debito
+        ar_account = AccountMapping.get_or_error("crediti_clienti")
+        vat_account = AccountMapping.get_or_error("iva_debito")
 
         if doc_type == "DR":
             # Fattura: Dare Crediti — Avere Ricavi (per riga) + IVA
@@ -205,7 +214,14 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
             doc_date=invoice_date, description=description or f"{doc_label} {invoice_number}",
             lines=journal_lines, source_module="LEDGER", reference=invoice_number,
             created_by_id=current_user.id, economic_subject_id=customer_id, gross_amount=gross,
+            commit=False,
         )
+        if doc_type == "DR":
+            # Solo la fattura genera rate/scadenzario — la nota di credito (DG)
+            # si compensa in blocco contro fatture aperte dello stesso cliente,
+            # come già fa customer_payment: una rata a importo "negativo" non
+            # avrebbe senso in questo modello.
+            create_installments_for_invoice(entry)
 
         # Righe commerciali (alimentano DettaglioLinee/DatiRiepilogo dell'XML)
         for n, r in enumerate(rows, start=1):
@@ -272,53 +288,63 @@ def customer_credit_note():
 def customer_payment():
     """Incasso cliente — Incasso Cliente su fatture aperte (compensazione semplificata)."""
     open_invoices = (JournalEntry.query
-                     .filter_by(doc_type="DR", is_paid=False, is_reversed=False)
+                     .filter(JournalEntry.doc_type.in_(("DR", "DG")),
+                             JournalEntry.is_paid.is_(False), JournalEntry.is_reversed.is_(False))
                      .order_by(JournalEntry.doc_date)
                      .all())
 
     if request.method == "POST":
-        selected_ids = request.form.getlist("invoice_ids[]")
+        raw_ids = request.form.getlist("invoice_ids[]")
+        try:
+            selected_ids = {int(value) for value in raw_ids}
+        except (TypeError, ValueError):
+            selected_ids = set()
         if not selected_ids:
             flash("Seleziona almeno una fattura da incassare.", "warning")
             return redirect(url_for("ar.customer_payment"))
 
         try:
-            ar_account = _get_account_by_code("140000")
-            bank_account = _get_account_by_code("180000")
+            invoices = (JournalEntry.query
+                        .filter(JournalEntry.id.in_(selected_ids), JournalEntry.doc_type.in_(("DR", "DG")),
+                                JournalEntry.is_paid.is_(False), JournalEntry.is_reversed.is_(False))
+                        .all())
+            if len(invoices) != len(selected_ids):
+                raise ValueError("La selezione contiene documenti non validi, già chiusi o stornati.")
+            subject_ids = {inv.economic_subject_id for inv in invoices}
+            if None in subject_ids or len(subject_ids) != 1:
+                raise ValueError("Compensare in un unico incasso solo documenti dello stesso cliente.")
 
-            total = 0
-            refs = []
-            subject_ids = set()
-            for eid in selected_ids:
-                inv = JournalEntry.query.get(int(eid))
-                if inv and not inv.is_paid:
-                    total += float(inv.gross_amount or 0)
-                    refs.append(inv.doc_number)
-                    subject_ids.add(inv.economic_subject_id)
-
-            lines = [
-                {"account_id": bank_account.id, "dare": total, "avere": 0},
-                {"account_id": ar_account.id, "dare": 0, "avere": total},
-            ]
-            economic_subject_id = subject_ids.pop() if len(subject_ids) == 1 else None
+            ar_account = AccountMapping.get_or_error("crediti_clienti")
+            bank_account = AccountMapping.get_or_error("banca_principale")
+            total = sum(((Decimal("-1") if inv.doc_type == "DG" else Decimal("1")) *
+                         Decimal(str(inv.gross_amount or 0)) for inv in invoices), Decimal("0"))
+            if total <= 0:
+                raise ValueError("Il totale da incassare deve essere positivo.")
+            refs = [inv.doc_number for inv in invoices]
+            economic_subject_id = next(iter(subject_ids))
             payment_entry = post_journal_entry(
-                doc_type="DZ", prefix="14",
-                doc_date=None, description=f"Incasso cliente — {', '.join(refs)}",
-                lines=lines, source_module="LEDGER", reference=", ".join(refs),
+                doc_type="DZ", prefix="14", doc_date=None,
+                description=f"Incasso cliente — {', '.join(refs)}",
+                lines=[
+                    {"account_id": bank_account.id, "dare": total, "avere": 0},
+                    {"account_id": ar_account.id, "dare": 0, "avere": total},
+                ],
+                source_module="LEDGER", reference=", ".join(refs),
                 created_by_id=current_user.id, economic_subject_id=economic_subject_id,
-                gross_amount=total,
+                gross_amount=total, commit=False,
             )
-
-            for eid in selected_ids:
-                inv = JournalEntry.query.get(int(eid))
-                if inv:
-                    inv.is_paid = True
-                    inv.paid_by_entry_id = payment_entry.id
+            for inv in invoices:
+                inv.is_paid = True
+                inv.paid_by_entry_id = payment_entry.id
+                if inv.doc_type == "DR":
+                    for inst in InvoiceInstallment.query.filter_by(entry_id=inv.id).all():
+                        inst.residual_amount = 0
             db.session.commit()
-
-            flash(f"Incasso registrato: Doc. {payment_entry.doc_number} — Totale {total:.2f} €. {len(refs)} fatture compensate.", "success")
+            flash(f"Incasso registrato: Doc. {payment_entry.doc_number} — Totale {total:.2f} €. "
+                  f"{len(invoices)} documenti compensati.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=payment_entry.id))
         except (UnbalancedEntryError, ValueError) as e:
+            db.session.rollback()
             flash(str(e), "danger")
 
     return render_template("ar/customer_payment.html", open_invoices=open_invoices)
