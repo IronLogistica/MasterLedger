@@ -216,7 +216,14 @@ def deliveries():
             return redirect(url_for("sd.deliveries"))
 
         # ── controllo disponibilità (FIX: MasterLogistic-WMS è ora l'unica
-        # fonte di verità per la giacenza — non usiamo più la copia locale) ──
+        # fonte di verità per la giacenza — non usiamo più la copia locale).
+        # ECCEZIONE: se MASTERLOGISTIC_URL non è affatto configurato (non
+        # ancora collegato), si procede SENZA controllo invece di bloccare
+        # in toto — utile per collaudare il resto del ciclo prima che il
+        # collegamento sia pronto. Se invece l'URL C'È ma non risponde
+        # (problema di rete reale), resta bloccato come prima: quello è un
+        # rischio concreto di spedire merce che non c'è, non da bypassare.
+        stock_verificato = True
         try:
             to_ship = []
             for l in o.lines:
@@ -232,8 +239,18 @@ def deliveries():
                     return redirect(url_for("sd.deliveries"))
                 to_ship.append((l, residual))
         except LogisticError as e:
-            flash(str(e), "danger")
-            return redirect(url_for("sd.deliveries"))
+            if "non configurato" in str(e):
+                stock_verificato = False
+                to_ship = []
+                for l in o.lines:
+                    residual = Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0))
+                    if residual > 0:
+                        to_ship.append((l, residual))
+                flash("MasterLogistic-WMS non è collegato: DDT registrato SENZA controllo giacenza reale. "
+                      "Collega MASTERLOGISTIC_URL appena possibile per riattivare la verifica.", "warning")
+            else:
+                flash(str(e), "danger")
+                return redirect(url_for("sd.deliveries"))
         if not to_ship:
             flash("Nulla da consegnare su questo ordine.", "warning")
             return redirect(url_for("sd.deliveries"))
@@ -243,7 +260,7 @@ def deliveries():
             d = Delivery(
                 doc_number=DocumentSequence.next_number("DL", "32"),
                 order_id=o.id, economic_subject_id=o.economic_subject_id,
-                created_by_id=current_user.id,
+                created_by_id=current_user.id, stock_verified=stock_verificato,
             )
             db.session.add(d)
             db.session.flush()
