@@ -8,6 +8,7 @@ from models import (Account, CostCenter, PayrollAccountConfig, PayrollEmployeeMa
 from services.payroll import (parse_payslips, parse_f24, fingerprint, PayrollParseError,
                               post_import, posted_payslip_allocations, parse_ratei, validate_percent_splits, mapping_splits, approved_payslip_splits)
 from services.posting import post_journal_entry, UnbalancedEntryError
+from blueprints.decorators import commercialista_required
 payroll_bp=Blueprint('payroll',__name__,template_folder='../../templates/payroll')
 
 
@@ -219,6 +220,7 @@ def salary_payment():
 
 @payroll_bp.route('/config',methods=['GET','POST'])
 @login_required
+@commercialista_required
 def config():
     cfg=PayrollAccountConfig.query.first() or PayrollAccountConfig()
     fields=['wage_expense_account_id','employer_burden_account_id','net_salary_payable_account_id','inps_payable_account_id','withholding_payable_account_id','bank_account_id','imu_expense_account_id','accrued_holiday_expense_account_id','accrued_permission_expense_account_id','accrued_thirteenth_expense_account_id','accrued_payable_account_id','tfr_expense_account_id','tfr_fund_account_id']
