@@ -13,6 +13,7 @@ Principi seguiti, coerenti con quanto deciso nel piano di trasformazione:
     dal proprio pannello, senza bisogno di toccare l'applicazione.
 """
 from datetime import datetime
+from decimal import Decimal
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
@@ -396,6 +397,281 @@ class FiscalParameter(db.Model):
 
 
 # ══════════════════════════════════════════════════════════════
+# Fase 4 (progettazione parti mancanti, punto 6) — Riconciliazione
+# bancaria. Modello a tre livelli: testata estratto conto, righe
+# importate, allocazioni molti-a-molti verso le righe del mastrino
+# (un bonifico può chiudere più fatture, una riga GL può essere
+# coperta da più movimenti bancari — es. incasso + commissione
+# separati sull'estratto conto).
+class BankStatement(db.Model):
+    __tablename__ = "bank_statements"
+
+    id = db.Column(db.Integer, primary_key=True)
+    bank_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False)
+    period_from = db.Column(db.Date, nullable=False)
+    period_to = db.Column(db.Date, nullable=False)
+    opening_balance = db.Column(db.Numeric(14, 2), nullable=False)
+    closing_balance = db.Column(db.Numeric(14, 2), nullable=False)
+    import_filename = db.Column(db.String(255))
+    file_hash = db.Column(db.String(64))  # impronta dell'INTERO file — evita di reimportare lo stesso file due volte
+    imported_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    imported_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    bank_account = db.relationship("Account")
+    imported_by = db.relationship("User")
+
+    __table_args__ = (db.UniqueConstraint("bank_account_id", "file_hash", name="uq_statement_file_hash"),)
+
+
+class BankStatementLine(db.Model):
+    __tablename__ = "bank_statement_lines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    statement_id = db.Column(db.Integer, db.ForeignKey("bank_statements.id"), nullable=False)
+    value_date = db.Column(db.Date, nullable=False)
+    description = db.Column(db.String(255))
+    amount = db.Column(db.Numeric(14, 2), nullable=False)  # positivo=accredito, negativo=addebito
+    bank_transaction_id = db.Column(db.String(120))  # identificativo bancario, se il formato lo fornisce
+    # Hash CONTESTUALIZZATO (non unique globale): due movimenti reali
+    # possono avere stesso importo/data/descrizione senza essere lo
+    # stesso movimento — l'unicità è su (statement_id, hash), non sulla
+    # sola riga, così un secondo import dello stesso file viene bloccato
+    # ma due bonifici identici nello stesso giorno restano entrambi validi.
+    import_hash = db.Column(db.String(64), nullable=False)
+
+    statement = db.relationship("BankStatement", backref="lines")
+
+    __table_args__ = (db.UniqueConstraint("statement_id", "import_hash", name="uq_statement_line_hash"),)
+
+    @property
+    def allocated_amount(self):
+        return sum((a.amount_allocated for a in self.allocations if not a.reversed), Decimal("0"))
+
+    @property
+    def residual_amount(self):
+        return abs(Decimal(str(self.amount))) - self.allocated_amount
+
+    @property
+    def is_reconciled(self):
+        return self.residual_amount <= 0
+
+
+class BankReconciliationAllocation(db.Model):
+    """Allocazione molti-a-molti tra una riga di estratto conto e una riga
+    di mastrino GL — mai un collegamento 1:1 rigido: un bonifico può
+    chiudere più fatture, un incasso e la sua commissione possono comparire
+    come due righe separate sull'estratto conto per un solo movimento GL."""
+    __tablename__ = "bank_reconciliation_allocations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    statement_line_id = db.Column(db.Integer, db.ForeignKey("bank_statement_lines.id"), nullable=False)
+    journal_line_id = db.Column(db.Integer, db.ForeignKey("journal_lines.id"), nullable=False)
+    amount_allocated = db.Column(db.Numeric(14, 2), nullable=False)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reversed = db.Column(db.Boolean, default=False)
+
+    statement_line = db.relationship("BankStatementLine", backref="allocations")
+    journal_line = db.relationship("JournalLine", backref="bank_allocations")
+
+
+# ══════════════════════════════════════════════════════════════
+# Fase 3 (progettazione parti mancanti, punto 1) — Pagamenti
+# parziali, scadenze e residui.
+#
+# Ogni fattura (KR/DR) riceve almeno UNA rata (InvoiceInstallment)
+# alla creazione — se non è configurato un piano a più scadenze,
+# la rata è unica e copre l'intero gross_amount, così il comportamento
+# di oggi (paga tutto insieme) resta disponibile senza differenze.
+#
+# is_paid su JournalEntry NON diventa una proprietà calcolata (lo
+# era stato proposto in una prima versione e correttamente respinto
+# in revisione: il codice esistente lo usa dentro filter() SQL, una
+# property Python non è interrogabile lì). Resta una colonna vera,
+# sincronizzata dentro la STESSA transazione di ogni allocazione:
+# quando l'ultima rata di una fattura si azzera, is_paid diventa True
+# nello stesso commit — mai in un passaggio separato.
+class InvoiceInstallment(db.Model):
+    __tablename__ = "invoice_installments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
+    numero_rata = db.Column(db.Integer, nullable=False, default=1)
+    due_date = db.Column(db.Date, nullable=False)
+    amount = db.Column(db.Numeric(14, 2), nullable=False)           # importo originario della rata
+    residual_amount = db.Column(db.Numeric(14, 2), nullable=False)  # si riduce ad ogni allocazione, mai < 0, mai > amount
+    version = db.Column(db.Integer, nullable=False, default=0)      # controllo di concorrenza ottimistico
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    entry = db.relationship("JournalEntry", foreign_keys=[entry_id])
+
+    @property
+    def is_settled(self):
+        return self.residual_amount <= 0
+
+    @property
+    def is_overdue(self):
+        """Non salvato: calcolato al momento della query contro la data
+        odierna — 'scaduta' non è mai un valore persistito e stantio."""
+        return (not self.is_settled) and self.due_date < datetime.utcnow().date()
+
+    @property
+    def status_label(self):
+        if self.is_settled:
+            return "saldata"
+        if self.residual_amount < self.amount:
+            return "scaduta e parziale" if self.is_overdue else "parziale"
+        return "scaduta" if self.is_overdue else "aperta"
+
+
+class PaymentAllocation(db.Model):
+    """Allocazione molti-a-molti: un pagamento può chiudere più rate, una
+    rata può ricevere più pagamenti nel tempo. cash_amount è la quota
+    coperta da denaro reale (si somma al movimento banca del pagamento);
+    abbuono_amount è una quota che riduce comunque il residuo della rata
+    ma genera una riga contabile separata sul conto abbuoni autorizzato,
+    non un movimento di cassa."""
+    __tablename__ = "payment_allocations"
+
+    id = db.Column(db.Integer, primary_key=True)
+    payment_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
+    installment_id = db.Column(db.Integer, db.ForeignKey("invoice_installments.id"), nullable=False)
+    cash_amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    abbuono_amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reversed = db.Column(db.Boolean, default=False)
+    reversed_at = db.Column(db.DateTime)
+    reversed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    payment_entry = db.relationship("JournalEntry", foreign_keys=[payment_entry_id])
+    installment = db.relationship("InvoiceInstallment")
+
+
+# ══════════════════════════════════════════════════════════════
+# Fase 2 (progettazione parti mancanti, punto 5) — Chiusura e
+# blocco dei periodi contabili.
+#
+# Un periodo ASSENTE da questa tabella è bloccante per default
+# (vedi PERIOD_LOCK_ENFORCED in services/posting.py) SOLO dopo che
+# l'azienda ha iniziato a creare i propri periodi. Durante la messa
+# in produzione iniziale, quando ancora nessun periodo esiste, il
+# blocco è disattivabile da FiscalParameter così da non paralizzare
+# il lavoro il primo giorno — va riattivato non appena i periodi
+# sono stati creati (vedi info_box nella pagina di gestione periodi).
+class AccountingPeriod(db.Model):
+    __tablename__ = "accounting_periods"
+    __table_args__ = (db.UniqueConstraint("company", "year", "month", name="uq_period_company_year_month"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    company = db.Column(db.String(80), nullable=False, default="Iron Appalti")  # esplicito fin da subito, anche se oggi single-company
+    year = db.Column(db.Integer, nullable=False)
+    month = db.Column(db.Integer, nullable=False)  # 1-12
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date, nullable=False)
+    period_type = db.Column(db.String(20), default="mensile")  # mensile | trimestrale | annuale
+    status = db.Column(db.String(24), default="aperto")  # aperto | chiuso | riaperto_temporaneamente
+    closed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    closed_at = db.Column(db.DateTime)
+    reopen_reason = db.Column(db.String(255))
+
+    closed_by = db.relationship("User")
+
+    @property
+    def is_open(self):
+        return self.status in ("aperto", "riaperto_temporaneamente")
+
+    @staticmethod
+    def find_for_date(d, company="Iron Appalti"):
+        return AccountingPeriod.query.filter(
+            AccountingPeriod.company == company,
+            AccountingPeriod.start_date <= d,
+            AccountingPeriod.end_date >= d,
+        ).first()
+
+
+class AccountingPeriodLog(db.Model):
+    """Log immutabile di chiusure/riaperture — tabella separata da
+    AccountingPeriod apposta: anche se lo stato del periodo viene
+    riportato indietro (riapertura), la storia di CHI e QUANDO resta,
+    riga per riga, mai sovrascritta."""
+    __tablename__ = "accounting_period_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    period_id = db.Column(db.Integer, db.ForeignKey("accounting_periods.id"), nullable=False)
+    action = db.Column(db.String(20), nullable=False)  # chiusura | riapertura
+    performed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    performed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reason = db.Column(db.String(255))
+
+    period = db.relationship("AccountingPeriod")
+    performed_by = db.relationship("User")
+
+
+# ══════════════════════════════════════════════════════════════
+# Fase 1 (progettazione parti mancanti, punto 0) — Piano dei conti
+# canonico e configurabile.
+#
+# PERCHÉ ESISTE: prima di questa tabella, AP/AR/GL/Cespiti avevano i
+# codici conto (banca, IVA a credito/debito, crediti clienti, debiti
+# fornitori...) scritti a mano dentro _get_account_by_code("180000")
+# sparsi in più file. Cambiare piano dei conti significava una caccia
+# al codice in ogni blueprint. Ora ogni concetto si legge da qui.
+#
+# COSA NON FA: non esegue una migrazione automatica verso il piano dei
+# conti "reale" di Iron Appalti. Gli Schemi 1-13 (services/
+# classificazione_operazioni.py, services/rettifiche_operazioni.py)
+# usano già i codici reali (032003, 045001...) perché quei codici sono
+# noti con certezza. Per i concetti di BASE usati qui sotto (crediti
+# clienti, debiti fornitori, cespiti) NON esiste ancora una conferma
+# del codice reale equivalente nel piano dei ~795 conti del
+# commercialista — il CSV completo non è mai stato ricevuto. Finché
+# non arriva, questa tabella punta ai codici "generici" originari
+# (140000, 154000, 170000, 180000, 210000...): NIENTE CAMBIA nel
+# comportamento oggi, cambia solo DOVE il codice è scritto — da
+# sparso nel codice a centralizzato qui, pronto per essere aggiornato
+# in un solo posto quando la mappatura reale sarà approvata.
+class AccountMapping(db.Model):
+    """
+    Concetto contabile → conto attivo. Modificabile SOLO da ruolo
+    'commercialista' (stessa protezione di FiscalParameter/
+    PayrollAccountConfig). Il codice applicativo LEGGE da qui,
+    non decide più da solo quale conto usare.
+    """
+    __tablename__ = "account_mappings"
+
+    id = db.Column(db.Integer, primary_key=True)
+    concept_key = db.Column(db.String(60), unique=True, nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False)
+    label = db.Column(db.String(120), nullable=False)   # descrizione leggibile per l'UI di configurazione
+    category = db.Column(db.String(40))                 # 'banca' | 'iva' | 'clienti_fornitori' | 'cespiti'
+    updated_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    account = db.relationship("Account")
+    updated_by = db.relationship("User")
+
+    @staticmethod
+    def get(concept_key):
+        """Ritorna l'Account mappato per un concetto, o None se non configurato."""
+        m = AccountMapping.query.filter_by(concept_key=concept_key).first()
+        return m.account if m else None
+
+    @staticmethod
+    def get_or_error(concept_key):
+        """Come get(), ma solleva un errore esplicito invece di un None silenzioso —
+        così un concetto non ancora configurato blocca l'operazione con un
+        messaggio chiaro invece di un crash a valle o, peggio, una scrittura
+        su un conto sbagliato."""
+        account = AccountMapping.get(concept_key)
+        if account is None:
+            raise ValueError(
+                f"Il concetto contabile '{concept_key}' non è configurato in "
+                f"AccountMapping — contatta il commercialista prima di procedere."
+            )
+        return account
+
+
+# ══════════════════════════════════════════════════════════════
 # ANAGRAFICA ARTICOLI (Material Master — MM01 semplificato)
 # ══════════════════════════════════════════════════════════════
 class Material(db.Model):
@@ -525,6 +801,11 @@ class Delivery(db.Model):
     billing_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Fase 4 (progettazione parti mancanti, punto 4) — storno di dominio
+    is_reversed = db.Column(db.Boolean, default=False)
+    reversal_reason = db.Column(db.String(255))
+    reversed_at = db.Column(db.DateTime)
+    reversed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
 
     order = db.relationship("SalesOrder", backref="deliveries")
     party = db.relationship("EconomicSubject")
@@ -620,9 +901,14 @@ class GoodsReceipt(db.Model):
     journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Fase 4 (progettazione parti mancanti, punto 4) — storno di dominio
+    is_reversed = db.Column(db.Boolean, default=False)
+    reversal_reason = db.Column(db.String(255))
+    reversed_at = db.Column(db.DateTime)
+    reversed_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
 
     po = db.relationship("PurchaseOrder", backref="receipts")
-    journal_entry = db.relationship("JournalEntry")
+    journal_entry = db.relationship("JournalEntry", foreign_keys=[journal_entry_id])
     lines = db.relationship("GoodsReceiptLine", backref="receipt", cascade="all, delete-orphan")
 
 

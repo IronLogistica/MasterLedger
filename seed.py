@@ -98,6 +98,8 @@ ACCOUNTS = [
     ("648000", "Interessi Passivi Bancari",                      "costo",                 True,  "COST"),
     ("650000", "Compensi a Professionisti",                      "costo",                 True,  "COST"),
     ("651000", "Rimborsi Spese a Dipendenti e Collaboratori",     "costo",                 True,  "COST"),
+    ("652000", "Abbuoni Attivi Concessi a Clienti (Fase 3, pagamenti parziali)", "costo",   True,  "COST"),
+    ("452000", "Abbuoni Passivi Ottenuti da Fornitori (Fase 3, pagamenti parziali)", "ricavo", True, "REVENUE"),
     ("660000", "Salari e Stipendi",                               "costo",                 True,  "COST"),
     ("661000", "Oneri Sociali (INPS/INAIL a carico azienda)",     "costo",                 True,  "COST"),
     ("662000", "Accantonamento TFR",                             "costo",                 True,  "COST"),
@@ -154,7 +156,7 @@ ACCOUNTS = [
     ("044915",   "Debiti v/Cassa Edile",                    "patrimoniale_passivo",   False, None),
     ("044960",   "Debiti v/Fondo TFR Alleanza Previdenza",  "patrimoniale_passivo",   False, None),
     ("045001",   "Debiti v/Erario c/IVA",                   "patrimoniale_passivo",   False, None),
-    ("045005",   "Iva acquisti",                            "costo",                  True, "COST"),
+    ("045005",   "Iva acquisti",                            "patrimoniale_attivo",     False, None),
     ("045006",   "Iva vendite",                             "costo",                  True, "COST"),
     ("045202",   "Clienti nota accr. da emettere (totale)", "costo",                  True, "COST"),
     ("045501",   "Ratei passivi",                           "costo",                  True, "COST"),
@@ -280,6 +282,35 @@ def run_seed():
             db.session.add(Material(code=code, description=desc, material_type=mtype, uom=uom,
                                     standard_cost=std_cost, sales_price=sales_price, vat_rate=vat,
                                     qty_on_hand=0, active=True))
+
+    # ── Piano dei conti CANONICO configurabile (Fase 1, progettazione parti
+    # mancanti punto 0) — default che puntano ESATTAMENTE ai codici già in
+    # uso oggi in AP/AR/GL/Cespiti. Nessun comportamento cambia con questo
+    # seed: cambia solo che ora il codice è centralizzato qui invece che
+    # sparso in ogni blueprint. Quando arriverà la mappatura reale approvata
+    # dal commercialista, si aggiornano queste righe in un solo posto.
+    db.session.flush()  # serve avere gli Account già persistiti per risolvere account_id
+    from models import AccountMapping
+    ACCOUNT_MAPPING_DEFAULTS = [
+        # concept_key,              codice conto attuale, etichetta,                          categoria
+        ("banca_principale",        "180000", "Banca c/c",                              "banca"),
+        ("iva_credito",             "154000", "IVA a Credito (acquisti)",                "iva"),
+        ("iva_debito",              "170000", "IVA a Debito (vendite)",                  "iva"),
+        ("crediti_clienti",         "140000", "Crediti v/Clienti (AR)",                  "clienti_fornitori"),
+        ("debiti_fornitori",        "210000", "Debiti v/Fornitori (AP)",                 "clienti_fornitori"),
+        ("cespiti_impianti",        "200000", "Cespiti — Impianti e Macchinari",         "cespiti"),
+        ("ammortamenti_costo",      "520000", "Ammortamenti (costo)",                    "cespiti"),
+        ("fondo_ammortamento",      "018000", "Fondo Ammortamento",                      "cespiti"),
+        ("ritenute_professionisti", "221000", "Debiti v/Erario c/Ritenute su Compensi Professionali", "iva"),
+        ("abbuoni_attivi",          "652000", "Abbuoni Attivi Concessi a Clienti",       "pagamenti"),
+        ("abbuoni_passivi",         "452000", "Abbuoni Passivi Ottenuti da Fornitori",   "pagamenti"),
+    ]
+    for concept_key, code, label, category in ACCOUNT_MAPPING_DEFAULTS:
+        if not AccountMapping.query.filter_by(concept_key=concept_key).first():
+            acc = Account.query.filter_by(code=code).first()
+            if acc:
+                db.session.add(AccountMapping(concept_key=concept_key, account_id=acc.id,
+                                              label=label, category=category))
 
     # ── Profilo Cedente/Prestatore per XML FatturaPA — dati di ESEMPIO ──
     # (vedi services/fatturapa.py e dashboard/routes.py). Da correggere
