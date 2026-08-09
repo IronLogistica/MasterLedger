@@ -14,7 +14,7 @@
   <div class="spacer"></div>
   <div class="user-info">
     <div>{{ current_user.full_name }}</div>
-    <div class="role">{{ current_user.role|capitalize }} · Codice {{ company_code }} · <a href="{{ url_for('auth.logout') }}" style="color:#cde3ff;">Esci</a></div>
+    <div class="role">{{ current_user.role|capitalize }} · Codice {{ company_code }} · <form method="post" action="{{ url_for('auth.logout') }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" style="background:none;border:0;padding:0;color:#cde3ff;text-decoration:underline;cursor:pointer;">Esci</button></form></div>
   </div>
 </div>
 
