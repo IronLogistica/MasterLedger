@@ -21,7 +21,7 @@
           <td class="mono">{{ d.order.doc_number }}</td>
           <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
           <td>
-            <form method="POST" style="display:inline;">
+            <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="delivery_id" value="{{ d.id }}">
               <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">→ Crea Fattura</button>
             </form>

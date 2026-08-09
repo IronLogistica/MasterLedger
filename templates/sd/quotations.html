@@ -5,7 +5,7 @@
 <div class="card">
   <div class="card-header">📝 Nuovo Preventivo Cliente <span class="tx-code">VA21</span></div>
   <div class="card-body">
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid" style="margin-bottom:12px;">
         <div class="form-group">
           <label>Cliente <span class="req">*</span></label>
@@ -39,7 +39,7 @@
           <td>{% if q.status == 'convertito' %}<span class="status-badge status-paid">CONVERTITO</span>{% else %}<span class="status-badge status-open">APERTO</span>{% endif %}</td>
           <td>
             {% if q.status == 'aperto' %}
-            <form method="POST" action="{{ url_for('sd.quotation_convert', quot_id=q.id) }}" style="display:inline;">
+            <form method="POST" action="{{ url_for('sd.quotation_convert', quot_id=q.id) }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">→ Crea Ordine (VA01)</button>
             </form>
             {% endif %}

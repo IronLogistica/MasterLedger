@@ -9,7 +9,7 @@
       scaricata e nasce la scrittura del <strong>Costo del Venduto</strong> al costo standard —
       <span class="mono">Dare 450000 Costo del Venduto / Avere Magazzino</span> — come il movimento 601 di SAP.
     </div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group" style="max-width:520px;">
         <label>Ordine cliente da consegnare <span class="req">*</span></label>
         <select name="order_id" required>
@@ -29,7 +29,7 @@
   <div class="card-body">
     {% if deliveries %}
     <table class="masterledger-table">
-      <thead><tr><th>DDT</th><th>Data</th><th>Cliente</th><th>Ordine</th><th class="td-num">Valore vendita €</th><th class="td-num">Costo del Venduto €</th><th>Scrittura COGS</th><th>Fattura</th></tr></thead>
+      <thead><tr><th>DDT</th><th>Data</th><th>Cliente</th><th>Ordine</th><th class="td-num">Valore vendita €</th><th class="td-num">Costo del Venduto €</th><th>Scrittura COGS</th><th>Fattura</th><th>Storno</th></tr></thead>
       <tbody>
         {% for d in deliveries %}
         <tr>
@@ -41,6 +41,20 @@
           <td class="td-num color-red">{{ '%.2f'|format(d.total_cogs) }}</td>
           <td>{% if d.cogs_entry %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=d.cogs_entry_id) }}">{{ d.cogs_entry.doc_number }}</a>{% else %}—{% endif %}</td>
           <td>{% if d.is_billed %}<a class="mono" href="{{ url_for('gl.entry_detail', entry_id=d.billing_entry_id) }}"><span class="status-badge status-paid">{{ d.billing_entry.doc_number }}</span></a>{% else %}<span class="status-badge status-open">DA FATTURARE</span>{% endif %}</td>
+          <td>
+            {% if d.is_reversed %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Stornato</span>
+            {% elif d.is_billed %}<span title="Storna prima la fattura collegata">—</span>
+            {% else %}
+            <details style="display:inline-block;">
+              <summary class="btn btn-ghost" style="display:inline;">Storna</summary>
+              <form method="post" action="{{ url_for('sd.deliveries_reverse', delivery_id=d.id) }}" style="margin-top:8px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="reason" placeholder="Motivo (obbligatorio)" required style="width:200px;">
+                <button type="submit" class="btn">Conferma</button>
+              </form>
+            </details>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

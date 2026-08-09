@@ -6,7 +6,7 @@
   <div class="card-header">🧾 Nuovo Ordine Cliente (senza preventivo) <span class="tx-code">VA01</span></div>
   <div class="card-body">
     <div class="info-box">Gli ordini nati da un preventivo si creano dalla pagina <a href="{{ url_for('sd.quotations') }}">Preventivi</a> con "→ Crea Ordine" (copy control SAP). Qui crei un ordine diretto.</div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid" style="margin-bottom:12px;">
         <div class="form-group">
           <label>Cliente <span class="req">*</span></label>
