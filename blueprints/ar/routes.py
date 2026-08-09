@@ -288,21 +288,25 @@ def customer_payment():
 
             total = 0
             refs = []
+            subject_ids = set()
             for eid in selected_ids:
                 inv = JournalEntry.query.get(int(eid))
                 if inv and not inv.is_paid:
                     total += float(inv.gross_amount or 0)
                     refs.append(inv.doc_number)
+                    subject_ids.add(inv.economic_subject_id)
 
             lines = [
                 {"account_id": bank_account.id, "dare": total, "avere": 0},
                 {"account_id": ar_account.id, "dare": 0, "avere": total},
             ]
+            economic_subject_id = subject_ids.pop() if len(subject_ids) == 1 else None
             payment_entry = post_journal_entry(
                 doc_type="DZ", prefix="14",
                 doc_date=None, description=f"Incasso cliente — {', '.join(refs)}",
                 lines=lines, source_module="LEDGER", reference=", ".join(refs),
-                created_by_id=current_user.id,
+                created_by_id=current_user.id, economic_subject_id=economic_subject_id,
+                gross_amount=total,
             )
 
             for eid in selected_ids:
