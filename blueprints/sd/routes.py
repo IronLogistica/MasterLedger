@@ -107,6 +107,16 @@ def quotations():
                            customers=customers, materials=materials)
 
 
+@sd_bp.route("/quotations/<int:quot_id>/conferma")
+@login_required
+def quotation_confirmation(quot_id):
+    """Conferma di Preventivo — documento formale da mandare al cliente,
+    stampabile/salvabile in PDF. Stesso principio già usato per la Conferma
+    d'Ordine: non è un nuovo modello dati, rilegge il Preventivo esistente."""
+    q = Quotation.query.get_or_404(quot_id)
+    return render_template("sd/quotation_confirmation.html", q=q)
+
+
 @sd_bp.route("/quotations/<int:quot_id>/convert", methods=["POST"])
 @login_required
 def quotation_convert(quot_id):
