@@ -263,6 +263,24 @@ def run_seed():
     if not CostCenter.query.filter_by(code="CC-PROD-01").first():
         db.session.add(CostCenter(code="CC-PROD-01", name="Produzione"))
 
+    # ── Articoli demo — SENZA questi, Ordini Cliente/Fornitore, DDT ed
+    # Entrata Merci hanno il menu articoli vuoto e non si può testare nulla
+    # del ciclo attivo/passivo. Codici in linea con MasterLogistic-WMS per
+    # il controllo giacenza in DDT (vedi services/logistic_client.py) — se
+    # gli SKU reali sono diversi, aggiornali qui prima di un uso reale.
+    from models import Material
+    MATERIALS_DEMO = [
+        # code,        description,                     type,   uom, standard_cost, sales_price, vat_rate
+        ("RM-LAM-001", "Lamiera acciaio S235 (materia prima)", "ROH",  "KG", 1.35, 0,     22),
+        ("SL-TRAN-01", "Transenna parapedonale (semilavorato)", "HALB", "PZ", 42.00, 0,    22),
+        ("FP-CART-01", "Cartello stradale assemblato (prodotto finito)", "FERT", "PZ", 28.50, 65.00, 22),
+    ]
+    for code, desc, mtype, uom, std_cost, sales_price, vat in MATERIALS_DEMO:
+        if not Material.query.filter_by(code=code).first():
+            db.session.add(Material(code=code, description=desc, material_type=mtype, uom=uom,
+                                    standard_cost=std_cost, sales_price=sales_price, vat_rate=vat,
+                                    qty_on_hand=0, active=True))
+
     # ── Profilo Cedente/Prestatore per XML FatturaPA — dati di ESEMPIO ──
     # (vedi services/fatturapa.py e dashboard/routes.py). Da correggere
     # in Configurazione Fiscale → "Fatturazione elettronica" con i dati
