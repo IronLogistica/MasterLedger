@@ -195,20 +195,24 @@ def partitario(economic_subject_id):
     documenti = []
     saldo_aperto = 0.0
     for e in entries:
-        # segno: le fatture cliente (DR) e i documenti che aumentano il credito verso
-        # il soggetto contano "a debito" per il partitario (lui ci deve pagare),
-        # incassi/pagamenti/note credito lo riducono — usiamo gross_amount se
-        # presente (importo lordo documento), altrimenti il totale Dare del documento.
         importo = float(e.gross_amount) if e.gross_amount is not None else e.total_dare
-        segno = -1 if e.doc_type in ("KZ", "DZ") else 1  # pagamento/incasso riduce l'aperto
-        if e.doc_type == "DG":  # nota di credito
-            segno = -1
-        if not e.is_reversed:
-            saldo_aperto += segno * importo if not e.is_paid else 0
+        if e.doc_type in ("KR", "DR", "DG"):
+            # Documenti-fattura: hanno un proprio stato aperto/pagato (is_paid).
+            # Contano nel saldo SOLO finché sono aperti — una volta pagati,
+            # il pagamento/incasso collegato li azzera (non va sommato di nuovo).
+            segno = -1 if e.doc_type == "DG" else 1  # nota di credito riduce l'aperto
+            if not e.is_reversed and not e.is_paid:
+                saldo_aperto += segno * importo
+            stato = "Stornato" if e.is_reversed else ("Pagato/Incassato" if e.is_paid else "Aperto")
+        else:
+            # Pagamenti/incassi (KZ/DZ): non hanno un proprio "aperto" — servono
+            # solo a chiudere la fattura collegata, che si è già azzerata sopra.
+            # Compaiono qui solo per tracciabilità, saldo_aperto invariato.
+            stato = "Stornato" if e.is_reversed else "Eseguito"
         documenti.append({
             "entry": e,
             "importo": importo,
-            "stato": "Stornato" if e.is_reversed else ("Pagato/Incassato" if e.is_paid else "Aperto"),
+            "stato": stato,
         })
 
     return render_template("gl/partitario.html", party=party, documenti=documenti,
