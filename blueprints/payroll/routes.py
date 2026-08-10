@@ -6,7 +6,8 @@ from extensions import db
 from models import (Account, CostCenter, PayrollAccountConfig, PayrollEmployeeMapping, PayrollImport,
                      F24ImuMapping, PayrollEmployeeAllocation, JournalEntry, JournalLine)
 from services.payroll import (parse_payslips, parse_f24, fingerprint, PayrollParseError,
-                              post_import, posted_payslip_allocations, parse_ratei, validate_percent_splits, mapping_splits, approved_payslip_splits)
+                              post_import, posted_payslip_allocations, parse_ratei, validate_percent_splits, mapping_splits, approved_payslip_splits,
+                              default_worker_inps, default_employer_contribution, validate_payslip_breakdown)
 from services.posting import post_journal_entry, UnbalancedEntryError
 from blueprints.decorators import commercialista_required
 payroll_bp=Blueprint('payroll',__name__,template_folder='../../templates/payroll')
@@ -66,6 +67,14 @@ def review(import_id):
                 except ValueError as e:
                     flash(f"{x['name']}: {e}",'danger'); return render_template('payroll/review.html',row=row,data=data,centers=centers)
                 x['cost_center_id']=x['splits'][0]['cost_center_id'] # compatibility snapshot
+                if row.document_kind=='PAYSLIP':
+                    try:
+                        worker_inps,employer_contribution=validate_payslip_breakdown(
+                            request.form.get(f'workerinps_{i}','').strip(), x['deductions'],
+                            request.form.get(f'employercontrib_{i}','').strip())
+                    except ValueError as e:
+                        flash(f"{x['name']}: {e}",'danger'); return render_template('payroll/review.html',row=row,data=data,centers=centers)
+                    x['worker_inps_contribution']=str(worker_inps); x['employer_contribution']=str(employer_contribution)
                 if row.document_kind=='PAYSLIP' and request.form.get('remember_'+str(i)):
                     mapping=PayrollEmployeeMapping.query.filter_by(employee_key=x['key']).first() or PayrollEmployeeMapping(employee_key=x['key'],employee_name=x['name'],cost_center_id=x['cost_center_id'])
                     mapping.employee_name=x['name'];mapping.cost_center_id=x['cost_center_id']; mapping.allocations[:]=[]
@@ -127,6 +136,11 @@ def review(import_id):
             # A posted monthly payslip is authoritative for ratei; mapping is the fallback.
             x['splits']=x.get('splits') or (approved_payslip_splits(data.get('payroll_period'),x['key']) if row.document_kind=='RATEI' else []) or mapping_splits(x['key'])
             if not x['splits'] and x.get('cost_center_id'): x['splits']=[{'cost_center_id':x['cost_center_id'],'percentage':'100.00'}]
+            if row.document_kind=='PAYSLIP':
+                # Solo precompilazione da aliquota configurata: l'importo definitivo resta sempre
+                # quello che il commercialista conferma o corregge in revisione, riga per riga.
+                x.setdefault('worker_inps_contribution', default_worker_inps(x['gross'], x['deductions'], cfg))
+                x.setdefault('employer_contribution', default_employer_contribution(x['gross'], cfg))
     else:
         for x in data.get('lines',[]):
             if x.get('classification')=='imu':
@@ -224,6 +238,7 @@ def salary_payment():
 def config():
     cfg=PayrollAccountConfig.query.first() or PayrollAccountConfig()
     fields=['wage_expense_account_id','employer_burden_account_id','net_salary_payable_account_id','inps_payable_account_id','withholding_payable_account_id','bank_account_id','imu_expense_account_id','accrued_holiday_expense_account_id','accrued_permission_expense_account_id','accrued_thirteenth_expense_account_id','accrued_payable_account_id','tfr_expense_account_id','tfr_fund_account_id']
+    rate_fields=['employee_inps_rate','employer_contribution_rate']
     if request.method=='POST':
         for field in fields:
             value=request.form.get(field,type=int)
@@ -234,6 +249,15 @@ def config():
                 if acc.account_type != expected:
                     flash(f'Il conto {acc.code} non ha natura coerente per questo campo (attesa: {expected}).', 'danger'); return render_template('payroll/config.html',cfg=cfg,accounts=Account.query.filter_by(active=True).order_by(Account.code).all())
             setattr(cfg,field,value)
+        for field in rate_fields:
+            raw=request.form.get(field,'').strip()
+            if not raw: setattr(cfg,field,None); continue
+            try: rate=Decimal(raw.replace(',','.'))
+            except InvalidOperation:
+                flash('Aliquota non valida: usare un numero (es. 9,19).','danger'); return render_template('payroll/config.html',cfg=cfg,accounts=Account.query.filter_by(active=True).order_by(Account.code).all())
+            if rate<0 or rate>100:
+                flash('Le aliquote devono essere comprese tra 0 e 100.','danger'); return render_template('payroll/config.html',cfg=cfg,accounts=Account.query.filter_by(active=True).order_by(Account.code).all())
+            setattr(cfg,field,rate.quantize(Decimal('.01')))
         if not cfg.id: db.session.add(cfg)
         db.session.commit(); flash('Configurazione conti paghe salvata.','success'); return redirect(url_for('payroll.index'))
     return render_template('payroll/config.html',cfg=cfg,accounts=Account.query.filter_by(active=True).order_by(Account.code).all())
