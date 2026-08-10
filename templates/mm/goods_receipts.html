@@ -2,29 +2,54 @@
 {% block title %}Entrata Merci{% endblock %}
 {% block content %}
 <div class="card">
-  <div class="card-header">📥 Entrata Merci su Ordine d'Acquisto <span class="tx-code">Entrata merci</span></div>
+  <div class="card-header">📥 MIGO — Entrata Merci su Ordine d'Acquisto <span class="tx-code">MIGO 101</span></div>
   <div class="card-body">
     <div class="info-box">
-      L'entrata merci carica la giacenza e registra
+      Alla ricezione del DDT registra subito
       <span class="mono">Dare Magazzino / Avere 165000 Ricevimenti da fatturare (EM/RF)</span>
-      al <strong>prezzo ordine</strong>. Il conto transitorio EM/RF verrà chiuso dalla Verifica Fattura —
-      questo è il perno del three-way match SAP.
+      al <strong>prezzo ordine</strong>. IVA e debito fornitore nasceranno solo con la MIRO.<br>
+      Questa operazione aggiorna la contabilità e il ricevuto sull'OA; la giacenza fisica resta gestita da MasterLogistic-WMS.
     </div>
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid" style="margin-bottom:12px;">
         <div class="form-group">
           <label>Ordine d'acquisto <span class="req">*</span></label>
-          <select name="po_id" required>
-            <option value="">—</option>
+          <select name="po_id" id="migo-po" required onchange="showMigoLines()">
+            <option value="">— seleziona —</option>
             {% for p in open_pos %}
             <option value="{{ p.id }}">{{ p.doc_number }} — {{ p.party.name }} ({{ p.status }})</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group"><label>N. DDT del fornitore</label><input type="text" name="ddt_vendor_ref" placeholder="es. 458/2026"></div>
+        <div class="form-group"><label>Data DDT / entrata merci <span class="req">*</span></label><input type="date" name="ddt_date" value="{{ today }}" required></div>
+        <div class="form-group"><label>Data registrazione contabile <span class="req">*</span></label><input type="date" name="posting_date" value="{{ today }}" required></div>
       </div>
-      <div class="theory-note" style="margin-bottom:12px;">Lasciando vuote le quantità viene ricevuto <strong>tutto il residuo</strong> dell'ordine. Per ricevimenti parziali seleziona l'OA, guarda le righe in elenco sotto, e compila <span class="mono">recv_qty_&lt;id riga&gt;</span> — oppure registra più entrate successive.</div>
-      <div class="btn-row"><button class="btn btn-primary" type="submit">Registra Entrata Merci</button></div>
+
+      {% for p in open_pos %}
+      <div class="migo-lines" data-po-id="{{ p.id }}" style="display:none; margin-bottom:12px;">
+        <table class="masterledger-table">
+          <thead><tr><th>Articolo</th><th class="td-num">Ordinato</th><th class="td-num">Già ricevuto</th><th class="td-num">Residuo</th><th style="width:150px;">Quantità del DDT</th></tr></thead>
+          <tbody>
+          {% for l in p.lines %}
+            {% set residual = l.qty - (l.qty_received or 0) %}
+            {% if residual > 0 %}
+            <tr>
+              <td>{{ l.material.code }} — {{ l.material.description }}</td>
+              <td class="td-num">{{ '%.3f'|format(l.qty) }}</td>
+              <td class="td-num">{{ '%.3f'|format(l.qty_received or 0) }}</td>
+              <td class="td-num">{{ '%.3f'|format(residual) }}</td>
+              <td><input type="number" step="0.001" min="0" max="{{ residual }}" name="recv_qty_{{ l.id }}" value="{{ '%.3f'|format(residual) }}" style="width:100%;"></td>
+            </tr>
+            {% endif %}
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endfor %}
+
+      <div class="theory-note" style="margin-bottom:12px;">Puoi registrare tutto il residuo oppure indicare quantità parziali riga per riga. Le quantità a zero non vengono ricevute.</div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Registra MIGO / Entrata Merci</button></div>
     </form>
   </div>
 </div>
@@ -67,4 +92,13 @@
     {% else %}<div class="empty-state">Nessuna entrata merci.</div>{% endif %}
   </div>
 </div>
+<script>
+function showMigoLines() {
+  const selected = document.getElementById('migo-po').value;
+  document.querySelectorAll('.migo-lines').forEach(function (box) {
+    box.style.display = box.dataset.poId === selected ? 'block' : 'none';
+  });
+}
+document.addEventListener('DOMContentLoaded', showMigoLines);
+</script>
 {% endblock %}
