@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🧮</span> Fatture da Emettere <span class="tx-code">DDT spediti, non ancora fatturati</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Un DDT consegnato scarica subito il Costo del Venduto, ma il ricavo entra in contabilità solo
+      quando emetti la fattura vera (Fatturazione DDT) — se passa del tempo tra i due momenti (es. a
+      cavallo di mese), qui puoi registrare il ricavo di <strong>competenza</strong> in anticipo
+      (<strong>Dare Fatture da Emettere / Avere Ricavi</strong>, senza IVA — non è ancora dovuta).
+      Quando poi emetti la fattura vera, il rateo si <strong>storna da solo</strong> in automatico —
+      non serve ricordarsene, non conterai il ricavo due volte.
+    </div>
+
+    <form method="POST" action="{{ url_for('sd.fatture_da_emettere_genera_tutti') }}" style="margin-bottom:20px; display:flex; gap:10px; align-items:end;" onsubmit="return confirm('Generare il rateo per TUTTI i DDT senza rateo già esistente?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div>
+        <label>Centro di Costo/Ricavo <span style="font-weight:400;">(facoltativo, applicato a tutti)</span></label>
+        <select name="cost_center_id">
+          <option value="">— nessuno —</option>
+          {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">🧮 Genera rateo per TUTTI i DDT in attesa</button>
+    </form>
+
+    <table class="masterledger-table">
+      <thead><tr><th>DDT</th><th>Data</th><th>Cliente</th><th class="td-num">Valore stimato €</th><th>Rateo</th><th></th></tr></thead>
+      <tbody>
+        {% for d in deliveries %}
+        <tr>
+          <td class="mono">{{ d.doc_number }}</td>
+          <td>{{ d.doc_date.strftime("%d/%m/%Y") }}</td>
+          <td>{{ d.party.name if d.party else "—" }}</td>
+          <td class="td-num">{{ "%.2f"|format(valori_stimati[d.id]) }}</td>
+          <td>
+            {% if d.accrual_entry_id %}
+            <a class="status-badge status-paid" href="{{ url_for('gl.entry_detail', entry_id=d.accrual_entry_id) }}">Generato</a>
+            {% else %}
+            <span class="status-badge status-open">Da generare</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if d.accrual_entry_id %}
+            <form method="POST" action="{{ url_for('sd.fatture_da_emettere_storna', delivery_id=d.id) }}" style="display:inline;" onsubmit="return confirm('Stornare questo rateo?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px; color:var(--ml-red);">Storna rateo</button>
+            </form>
+            {% else %}
+            <form method="POST" action="{{ url_for('sd.fatture_da_emettere_genera', delivery_id=d.id) }}" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <select name="cost_center_id" style="font-size:11px; padding:3px;">
+                <option value="">— nessun centro —</option>
+                {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }}</option>{% endfor %}
+              </select>
+              <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">Genera rateo</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">Nessun DDT spedito in attesa di fatturazione.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
