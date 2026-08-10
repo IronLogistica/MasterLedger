@@ -1,5 +1,5 @@
 """
-blueprints/sd/routes.py — Ciclo attivo in stile SAP SD.
+blueprints/sd/routes.py — Ciclo attivo Vendite e Spedizione (VS).
 
 Flusso documenti (copy control):
     Preventivo (VA21)  →  Ordine cliente (VA01)  →  DDT / Uscita merci (VL01N)
@@ -27,7 +27,7 @@ from models import (
     SalesOrder, SalesOrderLine, Delivery, DeliveryLine, InvoiceLine,
     JournalEntry, JournalLine, InvoiceInstallment, PaymentAllocation,
 )
-from services.posting import post_journal_entry, UnbalancedEntryError
+from services.posting import post_journal_entry, UnbalancedEntryError, _reverse_gl_only
 from services.co import validate_co_assignment, COValidationError
 from services.reversals import reverse_delivery, ReversalError
 from services.logistic_client import get_stock, LogisticError
@@ -119,7 +119,7 @@ def quotation_confirmation(quot_id):
 
 
 def _elimina_pagamenti_orfani(entry_ids_da_eliminare):
-    """Helper condiviso da tutte le cancellazioni SD sotto: dato un elenco
+    """Helper condiviso da tutte le cancellazioni VS sotto: dato un elenco
     di JournalEntry che stanno per essere eliminati, rimuove le
     allocazioni di pagamento verso le loro rate e — SOLO se un incasso
     resta senza più nessun legame verso fatture NON coinvolte in questa
@@ -159,7 +159,7 @@ def _elimina_pagamenti_orfani(entry_ids_da_eliminare):
 
 
 def _elimina_scrittura_sd(entry_id):
-    """Elimina una scrittura SD (Fattura da DDT o Costo del Venduto) e
+    """Elimina una scrittura VS (Fattura da DDT o Costo del Venduto) e
     tutto ciò che ne dipende, gestendo con cautela eventuali pagamenti.
     Blocca se la scrittura è coinvolta in uno storno (originale o storno
     stesso): eliminarla lascerebbe un riferimento rotto sull'altro lato,
@@ -182,11 +182,11 @@ def _elimina_scrittura_sd(entry_id):
 @login_required
 def fattura_elimina(entry_id):
     """Elimina una fattura generata da DDT (Fatturazione DDT) — solo se
-    generata dal ciclo SD (source_module='VENDITE'). Per dati di prova,
+    generata dal ciclo VS (source_module='VENDITE'). Per dati di prova,
     non per correggere fatture reali già emesse: quelle si stornano."""
     entry = JournalEntry.query.get_or_404(entry_id)
     if entry.source_module != "VENDITE" or entry.doc_type not in ("DR", "DG"):
-        flash("Questa fattura non è stata generata dal ciclo SD — non eliminabile da qui.", "danger")
+        flash("Questa fattura non è stata generata dal ciclo VS — non eliminabile da qui.", "danger")
         return redirect(url_for("sd.billing"))
     doc_number = entry.doc_number
     delivery = Delivery.query.filter_by(billing_entry_id=entry.id).first()
@@ -392,7 +392,7 @@ def deliveries():
                 if disponibile < residual:
                     flash(f"Giacenza insufficiente per {l.material.code} su MasterLogistic-WMS: "
                           f"disponibili {float(disponibile):.0f}, richiesti {float(residual):.0f}. "
-                          f"Registra prima un'Entrata Merci (MM).", "danger")
+                          f"Registra prima un'Entrata Merci (AM).", "danger")
                     return redirect(url_for("sd.deliveries"))
                 to_ship.append((l, residual))
         except LogisticError as e:
@@ -425,7 +425,7 @@ def deliveries():
             # ── PGI: scarico giacenza + scrittura COGS ───────
             # Il Costo del Venduto (450000) è CO-rilevante — il centro di
             # costo/ricavo è quindi richiesto qui, sempre (a differenza di
-            # MM dove serve solo in caso di varianza prezzo).
+            # AM dove serve solo in caso di varianza prezzo).
             cogs_acc, cogs_cost_center = validate_co_assignment(_acc("450000").id, cost_center_id)
             journal_lines = []
             total_cogs = Decimal("0")
@@ -488,6 +488,136 @@ def deliveries_reverse(delivery_id):
 # ══════════════════════════════════════════════════════════════
 # FATTURAZIONE DDT (VF01) — crea la fattura DR integrata con AR/FatturaPA
 # ══════════════════════════════════════════════════════════════
+# FATTURE DA EMETTERE (rateo attivo) — DDT spediti non ancora fatturati
+# ══════════════════════════════════════════════════════════════
+def _revenue_account_for_delivery(d):
+    """Stessa logica di scelta conto ricavi già usata in billing() —
+    centralizzata qui perché serve identica anche per il rateo."""
+    channel = d.party.revenue_channel if d.party else None
+    if channel == "affidamento_diretto":
+        return _acc("4001"), channel
+    return _acc("4000"), channel
+
+
+def _genera_rateo_ddt(d, cost_center_id=None):
+    """Genera la scrittura provvisoria di competenza per un DDT spedito ma
+    non ancora fatturato: Dare Fatture da Emettere / Avere Ricavi (SENZA
+    IVA — non è ancora dovuta, non esiste una vera fattura). Va SEMPRE
+    stornata quando arriva la fattura reale (vedi billing())."""
+    if d.cogs_entry_id is None:
+        raise ValueError(f"DDT {d.doc_number}: nessuna Uscita Merci collegata, non generabile.")
+    if d.billing_entry_id is not None:
+        raise ValueError(f"DDT {d.doc_number}: già fatturato, il rateo non serve più.")
+    if d.accrual_entry_id is not None:
+        raise ValueError(f"DDT {d.doc_number}: rateo già generato in precedenza.")
+
+    fde_acc = AccountMapping.get_or_error("fatture_da_emettere")
+    rev_acc, channel = _revenue_account_for_delivery(d)
+    cost_center = CostCenter.query.get(cost_center_id) if cost_center_id else None
+
+    total_net = Decimal("0")
+    journal_lines = []
+    for l in d.lines:
+        net = (Decimal(str(l.qty)) * Decimal(str(l.price))).quantize(Decimal("0.01"))
+        total_net += net
+        journal_lines.append({"account_id": rev_acc.id, "dare": 0, "avere": net,
+                              "description": f"Rateo — {l.material.code} - {l.material.description}",
+                              "cost_center_id": cost_center.id if cost_center else None})
+    journal_lines.insert(0, {"account_id": fde_acc.id, "dare": total_net, "avere": 0})
+
+    entry = post_journal_entry(
+        doc_type="SA", prefix="10", doc_date=None,
+        description=f"Rateo di competenza — DDT {d.doc_number} non ancora fatturato",
+        lines=journal_lines, source_module="VENDITE", reference=d.doc_number,
+        created_by_id=current_user.id, economic_subject_id=d.economic_subject_id,
+        gross_amount=total_net, commit=False,
+    )
+    d.accrual_entry_id = entry.id
+    db.session.flush()
+    return entry
+
+
+@sd_bp.route("/fatture-da-emettere", methods=["GET"])
+@login_required
+def fatture_da_emettere():
+    """Elenco DDT spediti ma non ancora fatturati — con la possibilità di
+    generare (o vedere già generato) il rateo di competenza di fine periodo."""
+    da_fatturare = (Delivery.query
+                    .filter(Delivery.billing_entry_id.is_(None), Delivery.cogs_entry_id.isnot(None))
+                    .order_by(Delivery.id.desc()).all())
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
+    valori_stimati = {
+        d.id: sum((Decimal(str(l.qty)) * Decimal(str(l.price)) for l in d.lines), Decimal("0"))
+        for d in da_fatturare
+    }
+    return render_template("sd/fatture_da_emettere.html", deliveries=da_fatturare,
+                           cost_centers=cost_centers, valori_stimati=valori_stimati)
+
+
+@sd_bp.route("/fatture-da-emettere/<int:delivery_id>/genera", methods=["POST"])
+@login_required
+def fatture_da_emettere_genera(delivery_id):
+    d = Delivery.query.get_or_404(delivery_id)
+    cost_center_id = request.form.get("cost_center_id", type=int)
+    try:
+        entry = _genera_rateo_ddt(d, cost_center_id)
+        db.session.commit()
+        flash(f"Rateo generato per DDT {d.doc_number}: Doc. {entry.doc_number} — "
+              f"{float(entry.gross_amount):.2f} € di ricavo di competenza.", "success")
+    except (ValueError, UnbalancedEntryError) as e:
+        db.session.rollback()
+        flash(str(e), "danger")
+    return redirect(url_for("sd.fatture_da_emettere"))
+
+
+@sd_bp.route("/fatture-da-emettere/genera-tutti", methods=["POST"])
+@login_required
+def fatture_da_emettere_genera_tutti():
+    """Genera il rateo per TUTTI i DDT spediti/non fatturati/senza rateo
+    già esistente — pensato per la chiusura di fine periodo."""
+    cost_center_id = request.form.get("cost_center_id", type=int)
+    candidati = (Delivery.query
+                .filter(Delivery.billing_entry_id.is_(None), Delivery.cogs_entry_id.isnot(None),
+                        Delivery.accrual_entry_id.is_(None)).all())
+    generati, errori = 0, []
+    for d in candidati:
+        try:
+            _genera_rateo_ddt(d, cost_center_id)
+            generati += 1
+        except (ValueError, UnbalancedEntryError) as e:
+            errori.append(str(e))
+    if generati:
+        db.session.commit()
+    if errori:
+        for e in errori:
+            flash(e, "danger")
+    flash(f"Generati {generati} ratei su {len(candidati)} DDT candidati.",
+          "success" if generati else "warning")
+    return redirect(url_for("sd.fatture_da_emettere"))
+
+
+@sd_bp.route("/fatture-da-emettere/<int:delivery_id>/storna", methods=["POST"])
+@login_required
+def fatture_da_emettere_storna(delivery_id):
+    """Storna un rateo generato per errore (senza dover aspettare la
+    fattura vera) — usa lo stesso storno di dominio già collaudato."""
+    d = Delivery.query.get_or_404(delivery_id)
+    if d.accrual_entry_id is None:
+        flash(f"DDT {d.doc_number}: nessun rateo da stornare.", "warning")
+        return redirect(url_for("sd.fatture_da_emettere"))
+    entry = JournalEntry.query.get(d.accrual_entry_id)
+    try:
+        _reverse_gl_only(entry, created_by_id=current_user.id)
+        d.accrual_entry_id = None
+        db.session.commit()
+        flash(f"Rateo per DDT {d.doc_number} stornato.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Errore nello storno: {e}", "danger")
+    return redirect(url_for("sd.fatture_da_emettere"))
+
+
+# ══════════════════════════════════════════════════════════════
 @sd_bp.route("/billing", methods=["GET", "POST"])
 @login_required
 def billing():
@@ -508,6 +638,16 @@ def billing():
         cost_center = CostCenter.query.get(cost_center_id) if cost_center_id else None
 
         try:
+            # Se esisteva già un rateo di competenza (Fatture da Emettere)
+            # per questo DDT, va stornato PRIMA della fattura vera — altrimenti
+            # il ricavo verrebbe contato due volte (una col rateo, una con
+            # la fattura reale).
+            if d.accrual_entry_id is not None:
+                rateo_entry = JournalEntry.query.get(d.accrual_entry_id)
+                if rateo_entry and not rateo_entry.is_reversed:
+                    _reverse_gl_only(rateo_entry, created_by_id=current_user.id)
+                d.accrual_entry_id = None
+
             ar_acc = AccountMapping.get_or_error("crediti_clienti")
             vat_acc = AccountMapping.get_or_error("iva_debito")
             # Conto ricavi scelto in base al canale del cliente: 'subappalto'
