@@ -1107,6 +1107,12 @@ class PayrollAccountConfig(db.Model):
     accrued_payable_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
     tfr_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
     tfr_fund_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+    # Aliquote SOLO come comodo valore di precompilazione in revisione: l'importo
+    # che viene davvero registrato è sempre quello (eventualmente corretto a mano)
+    # visibile e modificabile riga per riga nella maschera di revisione — mai
+    # un'aliquota applicata alla cieca in fase di contabilizzazione.
+    employee_inps_rate = db.Column(db.Numeric(5, 2), nullable=True)      # es. 9.19 — quota INPS a carico dipendente, dentro le trattenute
+    employer_contribution_rate = db.Column(db.Numeric(5, 2), nullable=True)  # es. 30.00 — oneri INPS/INAIL a carico azienda, NON dentro il lordo busta
     wage_expense_account = db.relationship("Account", foreign_keys=[wage_expense_account_id])
     employer_burden_account = db.relationship("Account", foreign_keys=[employer_burden_account_id])
     net_salary_payable_account = db.relationship("Account", foreign_keys=[net_salary_payable_account_id])
