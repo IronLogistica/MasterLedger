@@ -12,6 +12,7 @@ Per avviare in locale:
 Per Railway: il Procfile lancia gunicorn app:app (vedi Procfile).
 """
 import os
+import click
 from flask import Flask, render_template
 from flask_login import current_user
 
@@ -86,6 +87,50 @@ def create_app(config_class=Config):
         from seed import run_seed
         run_seed()
         print("Database popolato con dati di partenza.")
+
+    # ── Comando CLI per svuotare COMPLETAMENTE il database ──
+    # Pensato per ripartire da zero con le prime registrazioni di prova,
+    # senza dover distruggere/ricreare il database Postgres su Railway (più
+    # lento e rischia di disallineare le variabili d'ambiente di connessione).
+    # SVUOTA OGNI TABELLA — irreversibile, richiede conferma esplicita.
+    @app.cli.command("reset-db")
+    @click.option("--yes-i-am-sure", is_flag=True,
+                 help="Conferma esplicita: senza questo flag il comando non fa nulla.")
+    def reset_db(yes_i_am_sure):
+        """SVUOTA TUTTE LE TABELLE del database (irreversibile).
+        Uso: flask --app app reset-db --yes-i-am-sure
+        Dopo, rilancia 'flask --app app seed' per ripopolare piano dei conti,
+        utenti e dati di partenza — il reset da solo lascia tutto vuoto.
+        """
+        if not yes_i_am_sure:
+            print("ATTENZIONE: questo comando CANCELLA TUTTI I DATI dal database — ")
+            print("fatture, pagamenti, scritture, anagrafiche, TUTTO. Irreversibile.")
+            print("Se sei sicuro, rilancia con: flask --app app reset-db --yes-i-am-sure")
+            return
+
+        with app.app_context():
+            engine = db.engine
+            table_names = [t.name for t in db.metadata.sorted_tables]
+            with engine.begin() as conn:
+                if engine.dialect.name == "postgresql":
+                    if table_names:
+                        conn.execute(db.text(
+                            f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE;"
+                        ))
+                else:
+                    # SQLite (solo per test in locale) — ordine inverso per rispettare le FK.
+                    for name in reversed(table_names):
+                        conn.execute(db.text(f"DELETE FROM {name};"))
+                    has_sequence = conn.execute(db.text(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_sequence';"
+                    )).fetchone()
+                    if has_sequence:
+                        conn.execute(db.text(
+                            "DELETE FROM sqlite_sequence WHERE name IN "
+                            f"({','.join(repr(n) for n in table_names)});"
+                        ))
+        print(f"Database svuotato: {len(table_names)} tabelle azzerate.")
+        print("Ora rilancia: flask --app app seed")
 
     # ── Bootstrap automatico (Railway): SOLO conti/utenti garantiti ──
     # FIX (19/07/2026): qui c'era anche un db.create_all() automatico ad ogni
