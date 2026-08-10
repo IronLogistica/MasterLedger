@@ -29,8 +29,8 @@
                 <td class="td-num">{{ '%.0f'|format(l.qty) }}</td>
                 <td class="td-num">{{ '%.4f'|format(l.price) }}</td>
                 <td class="td-num {{ 'color-green' if l.qty_received >= l.qty else '' }}">{{ '%.0f'|format(l.qty_received) }}</td>
-                <td class="td-num">{{ '%.0f'|format(l.qty_invoiced) }}</td>
-                <td><input type="number" step="0.001" min="0" name="inv_qty_{{ l.id }}" value="{{ '%.0f'|format(l.qty_received - l.qty_invoiced) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
+                <td class="td-num">{{ '%.0f'|format(actual_qty_by_line[l.id]) }}</td>
+                <td><input type="number" step="0.001" min="0" name="inv_qty_{{ l.id }}" value="{{ '%.0f'|format(l.qty_received - actual_qty_by_line[l.id]) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
                 <td><input type="number" step="0.0001" min="0" name="inv_price_{{ l.id }}" value="{{ '%.4f'|format(l.price) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
               </tr>
               {% endfor %}
