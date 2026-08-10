@@ -25,7 +25,7 @@ from extensions import db
 from models import (
     Account, AccountMapping, CostCenter, EconomicSubject, Material, Quotation, QuotationLine,
     SalesOrder, SalesOrderLine, Delivery, DeliveryLine, InvoiceLine,
-    JournalEntry,
+    JournalEntry, JournalLine, InvoiceInstallment, PaymentAllocation,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.reversals import reverse_delivery, ReversalError
@@ -115,6 +115,125 @@ def quotation_confirmation(quot_id):
     d'Ordine: non è un nuovo modello dati, rilegge il Preventivo esistente."""
     q = Quotation.query.get_or_404(quot_id)
     return render_template("sd/quotation_confirmation.html", q=q)
+
+
+def _elimina_pagamenti_orfani(entry_ids_da_eliminare):
+    """Helper condiviso da tutte le cancellazioni SD sotto: dato un elenco
+    di JournalEntry che stanno per essere eliminati, rimuove le
+    allocazioni di pagamento verso le loro rate e — SOLO se un incasso
+    resta senza più nessun legame verso fatture NON coinvolte in questa
+    cancellazione — elimina anche quell'incasso. Se l'incasso pagava
+    ANCHE una fattura non toccata da questa cancellazione, resta intatto."""
+    installment_ids = [i.id for i in InvoiceInstallment.query.filter(
+        InvoiceInstallment.entry_id.in_(entry_ids_da_eliminare)).all()]
+    payment_entry_ids = set()
+    if installment_ids:
+        for pa in PaymentAllocation.query.filter(PaymentAllocation.installment_id.in_(installment_ids)).all():
+            payment_entry_ids.add(pa.payment_entry_id)
+            db.session.delete(pa)
+    for e in JournalEntry.query.filter(JournalEntry.id.in_(entry_ids_da_eliminare)).all():
+        if e.paid_by_entry_id:
+            payment_entry_ids.add(e.paid_by_entry_id)
+    db.session.flush()
+
+    for peid in payment_entry_ids:
+        ancora_usato = PaymentAllocation.query.filter_by(payment_entry_id=peid).first() is not None
+        ancora_paga_altro = JournalEntry.query.filter(
+            JournalEntry.paid_by_entry_id == peid,
+            ~JournalEntry.id.in_(entry_ids_da_eliminare)
+        ).first() is not None
+        if not ancora_usato and not ancora_paga_altro:
+            JournalLine.query.filter_by(entry_id=peid).delete(synchronize_session=False)
+            JournalEntry.query.filter_by(id=peid).delete(synchronize_session=False)
+
+
+def _elimina_scrittura_sd(entry_id):
+    """Elimina una scrittura SD (Fattura da DDT o Costo del Venduto) e
+    tutto ciò che ne dipende, gestendo con cautela eventuali pagamenti."""
+    _elimina_pagamenti_orfani([entry_id])
+    InvoiceInstallment.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    InvoiceLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    JournalLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    JournalEntry.query.filter_by(id=entry_id).delete(synchronize_session=False)
+
+
+@sd_bp.route("/fatture/<int:entry_id>/elimina", methods=["POST"])
+@login_required
+def fattura_elimina(entry_id):
+    """Elimina una fattura generata da DDT (Fatturazione DDT) — solo se
+    generata dal ciclo SD (source_module='VENDITE'). Per dati di prova,
+    non per correggere fatture reali già emesse: quelle si stornano."""
+    entry = JournalEntry.query.get_or_404(entry_id)
+    if entry.source_module != "VENDITE" or entry.doc_type not in ("DR", "DG"):
+        flash("Questa fattura non è stata generata dal ciclo SD — non eliminabile da qui.", "danger")
+        return redirect(url_for("sd.billing"))
+    doc_number = entry.doc_number
+    delivery = Delivery.query.filter_by(billing_entry_id=entry.id).first()
+    if delivery:
+        delivery.billing_entry_id = None
+    _elimina_scrittura_sd(entry.id)
+    db.session.commit()
+    flash(f"Fattura {doc_number} eliminata. Il DDT collegato torna disponibile per una nuova fatturazione.", "success")
+    return redirect(url_for("sd.billing"))
+
+
+@sd_bp.route("/deliveries/<int:delivery_id>/elimina", methods=["POST"])
+@login_required
+def delivery_elimina(delivery_id):
+    """Elimina un DDT — blocca se è già stato fatturato: elimina prima la fattura."""
+    d = Delivery.query.get_or_404(delivery_id)
+    if d.billing_entry_id is not None:
+        flash(f"Il DDT {d.doc_number} è già fatturato — elimina prima la fattura collegata.", "danger")
+        return redirect(url_for("sd.deliveries"))
+    doc_number = d.doc_number
+    if d.cogs_entry_id:
+        _elimina_scrittura_sd(d.cogs_entry_id)
+    for dl_line in d.lines:
+        so_line = SalesOrderLine.query.filter_by(order_id=d.order_id, material_id=dl_line.material_id).first()
+        if so_line is not None:
+            so_line.qty_delivered = max(Decimal("0"), Decimal(str(so_line.qty_delivered or 0)) - Decimal(str(dl_line.qty)))
+    # Le righe (DeliveryLine) sono già eliminate in automatico dal cascade
+    # della relationship — qui basta il delete dell'aggregato.
+    db.session.delete(d)
+    db.session.commit()
+    flash(f"DDT {doc_number} eliminato. Le quantità sull'ordine sono state ripristinate.", "success")
+    return redirect(url_for("sd.deliveries"))
+
+
+@sd_bp.route("/orders/<int:order_id>/elimina", methods=["POST"])
+@login_required
+def order_elimina(order_id):
+    """Elimina un ordine cliente — blocca se ha già DDT collegati: elimina prima quelli."""
+    o = SalesOrder.query.get_or_404(order_id)
+    if Delivery.query.filter_by(order_id=o.id).first():
+        flash(f"L'ordine {o.doc_number} ha già DDT collegati — eliminali prima.", "danger")
+        return redirect(url_for("sd.orders"))
+    doc_number = o.doc_number
+    if o.quotation_id:
+        q = Quotation.query.get(o.quotation_id)
+        if q and q.status == "convertito":
+            q.status = "aperto"  # il preventivo torna convertibile
+    # Le righe (SalesOrderLine) sono già eliminate in automatico dal cascade.
+    db.session.delete(o)
+    db.session.commit()
+    flash(f"Ordine {doc_number} eliminato.", "success")
+    return redirect(url_for("sd.orders"))
+
+
+@sd_bp.route("/quotations/<int:quot_id>/elimina", methods=["POST"])
+@login_required
+def quotation_elimina(quot_id):
+    """Elimina un preventivo — blocca se già convertito in ordine: elimina prima l'ordine."""
+    q = Quotation.query.get_or_404(quot_id)
+    if SalesOrder.query.filter_by(quotation_id=q.id).first():
+        flash(f"Il preventivo {q.doc_number} è già stato convertito in ordine — elimina prima l'ordine.", "danger")
+        return redirect(url_for("sd.quotations"))
+    doc_number = q.doc_number
+    # Le righe (QuotationLine) sono già eliminate in automatico dal cascade.
+    db.session.delete(q)
+    db.session.commit()
+    flash(f"Preventivo {doc_number} eliminato.", "success")
+    return redirect(url_for("sd.quotations"))
 
 
 @sd_bp.route("/quotations/<int:quot_id>/convert", methods=["POST"])
