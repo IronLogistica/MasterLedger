@@ -23,7 +23,7 @@
     <div class="sidebar-title">Generale</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='dashboard.home' }}" href="{{ url_for('dashboard.home') }}">🏠 Home</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='gl.journal_list' }}" href="{{ url_for('gl.journal_list') }}">📖 Giornale (Libro)</a>
-    <a class="sidebar-link {{ 'active' if request.endpoint=='gl.piano_conti' }}" href="{{ url_for('gl.piano_conti') }}">📋 Piano dei Conti</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='gl.piano_conti' }}" href="{{ url_for('gl.piano_conti') }}">📋 Piano dei Conti / Mastrini</a>
     <a class="sidebar-link {{ 'active' if request.endpoint in ['gl.cost_centers_list', 'gl.cost_center_ledger'] }}" href="{{ url_for('gl.cost_centers_list') }}">🏷️ Centri di Costo/Ricavo</a>
 
     <div class="sidebar-title">Contabilità Generale</div>
