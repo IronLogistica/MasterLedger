@@ -12,6 +12,12 @@
       registrazioni sono perfette.
     </div>
 
+    <div style="margin-bottom:18px;">
+      <label style="font-weight:600;">🔍 Vai subito al Mastrino di un conto</label>
+      <input type="text" id="mastrino-search" placeholder="Digita codice o nome conto (es. 180000, Banca)..."
+             style="width:100%; margin-top:6px;" oninput="filtraConti(this.value)">
+    </div>
+
     {% for tipo in ordine_tipi %}
     {% if gruppi.get(tipo) %}
     <h3 style="margin-top:22px;">{{ etichette_tipo[tipo] }} <span class="tx-code">{{ gruppi[tipo]|length }}</span></h3>
@@ -19,7 +25,7 @@
       <thead><tr><th>Codice</th><th>Nome</th><th>CO</th><th>Stato</th></tr></thead>
       <tbody>
         {% for a in gruppi[tipo] %}
-        <tr {{ 'style="opacity:.5;"' if not a.active }}>
+        <tr class="conto-row" data-search="{{ a.code|lower }} {{ a.name|lower }}" {{ 'style="opacity:.5;"' if not a.active }}>
           <td class="mono"><a href="{{ url_for('gl.mastrino_conto', account_id=a.id) }}">{{ a.code }}</a></td>
           <td><a href="{{ url_for('gl.mastrino_conto', account_id=a.id) }}">{{ a.name }}</a></td>
           <td>{% if a.cost_relevant %}<span class="status-badge status-paid">{{ a.cost_relevant_type }}</span>{% else %}—{% endif %}</td>
@@ -32,4 +38,23 @@
     {% endfor %}
   </div>
 </div>
+
+<script>
+function filtraConti(testo) {
+  const q = testo.trim().toLowerCase();
+  document.querySelectorAll('.conto-row').forEach(function(row) {
+    const match = !q || row.dataset.search.includes(q);
+    row.style.display = match ? '' : 'none';
+  });
+  // Se una sola riga visibile e testo abbastanza specifico, evidenziala
+  document.querySelectorAll('h3').forEach(function(h3) {
+    let table = h3.nextElementSibling;
+    if (table && table.tagName === 'TABLE') {
+      let visibili = table.querySelectorAll('.conto-row:not([style*="display: none"])').length;
+      h3.style.display = (q && visibili === 0) ? 'none' : '';
+      table.style.display = (q && visibili === 0) ? 'none' : '';
+    }
+  });
+}
+</script>
 {% endblock %}
