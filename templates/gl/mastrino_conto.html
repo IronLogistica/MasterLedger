@@ -27,14 +27,14 @@
     <table class="masterledger-table">
       <thead>
         <tr>
-          <th>Data</th><th>Documento</th><th>Descrizione</th><th>Modulo</th>
+          <th>Data</th><th>Documento</th><th>Descrizione</th><th>Modulo</th><th>Centro</th>
           <th>Dare</th><th>Avere</th><th>Saldo progressivo</th>
         </tr>
       </thead>
       <tbody>
         {% if filters.date_from %}
         <tr>
-          <td colspan="6"><em>Saldo iniziale al {{ filters.date_from }}</em></td>
+          <td colspan="7"><em>Saldo iniziale al {{ filters.date_from }}</em></td>
           <td class="mono"><strong>{{ "%.2f"|format(saldo_iniziale) }}</strong></td>
         </tr>
         {% endif %}
@@ -44,18 +44,23 @@
           <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=m.entry.id) }}">{{ m.entry.doc_number }}</a></td>
           <td>{{ m.entry.description or "" }}</td>
           <td>{{ m.entry.source_module }}</td>
+          <td>
+            {% if m.cost_center %}
+            <a href="{{ url_for('gl.cost_center_ledger', center_id=m.cost_center.id) }}" class="mono">{{ m.cost_center.code }}</a>
+            {% else %}<span style="color:#888;">—</span>{% endif %}
+          </td>
           <td class="mono">{{ "%.2f"|format(m.dare) if m.dare else "" }}</td>
           <td class="mono">{{ "%.2f"|format(m.avere) if m.avere else "" }}</td>
           <td class="mono"><strong>{{ "%.2f"|format(m.saldo_progressivo) }}</strong></td>
         </tr>
         {% else %}
-        <tr><td colspan="7">Nessun movimento su questo conto{{ " nel periodo selezionato" if filters.date_from or filters.date_to else "" }}.</td></tr>
+        <tr><td colspan="8">Nessun movimento su questo conto{{ " nel periodo selezionato" if filters.date_from or filters.date_to else "" }}.</td></tr>
         {% endfor %}
       </tbody>
       {% if movimenti %}
       <tfoot>
         <tr>
-          <td colspan="4"><strong>Totali</strong></td>
+          <td colspan="5"><strong>Totali</strong></td>
           <td class="mono"><strong>{{ "%.2f"|format(totale_dare) }}</strong></td>
           <td class="mono"><strong>{{ "%.2f"|format(totale_avere) }}</strong></td>
           <td class="mono"><strong>{{ "%.2f"|format(saldo_finale) }}</strong></td>

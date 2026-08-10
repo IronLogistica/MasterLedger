@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>📚</span> Libro Mastro <span class="tx-code">{{ mastrini|length }} conti movimentati</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Tutti i mastrini con almeno un movimento nel periodo, uno dopo l'altro — per un controllo completo senza
+      aprirli uno alla volta. I conti senza movimenti non compaiono (li trovi comunque nel
+      <a href="{{ url_for('gl.piano_conti') }}">Piano dei Conti</a>).
+    </div>
+
+    <form method="get" style="margin:14px 0; display:flex; gap:10px; align-items:end;">
+      <div><label>Da data</label><input type="date" name="date_from" value="{{ filters.date_from or '' }}"></div>
+      <div><label>A data</label><input type="date" name="date_to" value="{{ filters.date_to or '' }}"></div>
+      <button type="submit" class="btn">Filtra</button>
+      <a href="{{ url_for('gl.libro_mastro') }}" class="btn btn-secondary">Azzera</a>
+    </form>
+
+    {% if not mastrini %}
+    <div class="empty-state">Nessun movimento{{ " nel periodo selezionato" if filters.date_from or filters.date_to else "" }}.</div>
+    {% endif %}
+  </div>
+</div>
+
+{% for m in mastrini %}
+<div class="card" style="margin-top:16px;">
+  <div class="card-header">
+    <span>📒</span> <a href="{{ url_for('gl.mastrino_conto', account_id=m.account.id) }}" class="mono">{{ m.account.code }}</a> {{ m.account.name }}
+    <span class="tx-code">{{ m.movimenti|length }} movimenti · saldo {{ "%.2f"|format(m.saldo) }} €</span>
+  </div>
+  <div class="card-body">
+    <table class="masterledger-table">
+      <thead><tr><th>Data</th><th>Documento</th><th>Descrizione</th><th>Modulo</th><th>Centro</th><th>Dare</th><th>Avere</th><th>Saldo progressivo</th></tr></thead>
+      <tbody>
+        {% for mv in m.movimenti %}
+        <tr>
+          <td>{{ mv.entry.doc_date.strftime("%d/%m/%Y") }}</td>
+          <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=mv.entry.id) }}">{{ mv.entry.doc_number }}</a></td>
+          <td>{{ mv.entry.description or "" }}</td>
+          <td>{{ mv.entry.source_module }}</td>
+          <td>
+            {% if mv.cost_center %}<a href="{{ url_for('gl.cost_center_ledger', center_id=mv.cost_center.id) }}" class="mono">{{ mv.cost_center.code }}</a>
+            {% else %}<span style="color:#888;">—</span>{% endif %}
+          </td>
+          <td class="mono">{{ "%.2f"|format(mv.dare) if mv.dare else "" }}</td>
+          <td class="mono">{{ "%.2f"|format(mv.avere) if mv.avere else "" }}</td>
+          <td class="mono"><strong>{{ "%.2f"|format(mv.saldo_progressivo) }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}
