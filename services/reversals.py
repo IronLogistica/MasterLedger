@@ -18,6 +18,9 @@ from datetime import datetime
 from extensions import db
 from models import GoodsReceipt, PurchaseOrderLine, Delivery, SalesOrderLine
 from services.posting import _reverse_gl_only, PeriodClosedError
+from services.mm_invoice_quantities import (
+    reconcile_invoiced_qty, has_untracked_active_invoice, lock_po_lines,
+)
 
 
 class ReversalError(ValueError):
@@ -45,15 +48,27 @@ def reverse_goods_receipt(receipt_id, reason, created_by_id=None):
     if receipt.journal_entry_id is None:
         raise ReversalError("Entrata Merci senza scrittura contabile collegata — dato incoerente.")
 
+    locked_by_id = {line.id: line for line in lock_po_lines(receipt.po_id)}
+
+    # Un KR MM legacy senza dettaglio per riga è reale, ma la quantità non è
+    # ricostruibile con certezza: in questo caso il blocco resta conservativo.
+    if has_untracked_active_invoice(receipt.po):
+        raise ReversalError(
+            f"L'ordine {receipt.po.doc_number} ha una Verifica Fattura MM attiva non tracciata per riga: "
+            "riconcilia prima il documento."
+        )
+
     # Blocco a catena: nessuna riga di questa GR può risultare già fatturata
-    # oltre la quantità che RESTEREBBE ricevuta dopo lo storno.
+    # oltre la quantità che RESTEREBBE ricevuta dopo lo storno. qty_invoiced
+    # è una cache e viene quindi riconciliata prima del confronto.
     blocked = []
     for gr_line in receipt.lines:
-        po_line = gr_line.po_line
+        po_line = locked_by_id[gr_line.po_line_id]
+        actual_invoiced = reconcile_invoiced_qty(po_line)
         residual_after = po_line.qty_received - gr_line.qty
-        if po_line.qty_invoiced > residual_after:
+        if actual_invoiced > residual_after:
             blocked.append(
-                f"{po_line.material.code}: già fatturati {float(po_line.qty_invoiced):.0f}, "
+                f"{po_line.material.code}: già fatturati {float(actual_invoiced):.0f}, "
                 f"ma dopo lo storno resterebbero ricevuti solo {float(residual_after):.0f} — "
                 f"storna prima la Verifica Fattura collegata."
             )
@@ -63,7 +78,7 @@ def reverse_goods_receipt(receipt_id, reason, created_by_id=None):
     try:
         new_entry = _reverse_gl_only(receipt.journal_entry, created_by_id=created_by_id)
         for gr_line in receipt.lines:
-            gr_line.po_line.qty_received -= gr_line.qty
+            locked_by_id[gr_line.po_line_id].qty_received -= gr_line.qty
         receipt.is_reversed = True
         receipt.reversal_reason = reason.strip()
         receipt.reversed_at = datetime.utcnow()
