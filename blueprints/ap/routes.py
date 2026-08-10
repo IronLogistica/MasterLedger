@@ -23,7 +23,13 @@ def _get_account_by_code(code):
 @ap_bp.route("/supplier_invoice", methods=["GET", "POST"])
 @login_required
 def supplier_invoice():
-    """Fattura fornitore — Registrazione Fattura Fornitore."""
+    """Fattura fornitore — Registrazione Fattura Fornitore, multi-riga:
+    ogni riga ha il proprio conto di costo E il proprio centro di
+    costo/ricavo — una fattura con 6 prodotti per 6 centri diversi si
+    frazionano in 6 righe, ognuna spesata sul centro giusto. I costi
+    vanno SEMPRE spesati subito, riga per riga — non è un'eccezione
+    legata a una variazione di prezzo (quella è un concetto diverso,
+    del three-way match MM)."""
     vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
     expense_accounts = Account.query.filter_by(account_type="costo", active=True).order_by(Account.code).all()
     cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
@@ -32,41 +38,68 @@ def supplier_invoice():
         vendor_id = request.form.get("vendor_id", type=int)
         invoice_number = request.form.get("invoice_number", "").strip()
         invoice_date_str = request.form.get("invoice_date")
-        net = request.form.get("net", type=float) or 0
-        vat_rate = request.form.get("vat_rate", type=float) or 0
-        expense_account_id = request.form.get("expense_account_id", type=int)
         description = request.form.get("description", "").strip()
-        cost_center_id = request.form.get("cost_center_id", type=int)
 
-        vat = round(net * vat_rate / 100, 2)
-        gross = net + vat
+        descs = request.form.getlist("line_description[]")
+        nets = request.form.getlist("line_net[]")
+        rates = request.form.getlist("line_vat_rate[]")
+        accounts_ids = request.form.getlist("line_expense_account_id[]")
+        centers_ids = request.form.getlist("line_cost_center_id[]")
 
-        if not vendor_id or not net or not expense_account_id:
-            flash("Fornitore, imponibile e conto di costo sono obbligatori.", "danger")
+        if not vendor_id:
+            flash("Il fornitore è obbligatorio.", "danger")
             return render_template("ap/supplier_invoice.html", vendors=vendors, expense_accounts=expense_accounts, cost_centers=cost_centers)
 
         try:
             ap_account = AccountMapping.get_or_error("debiti_fornitori")
             vat_account = AccountMapping.get_or_error("iva_credito")
-            expense_account, cost_center = validate_co_assignment(expense_account_id, cost_center_id)
 
-            lines = [
-                {"account_id": expense_account.id, "dare": net, "avere": 0, "cost_center_id": cost_center.id if cost_center else None},
-                {"account_id": vat_account.id, "dare": vat, "avere": 0},
-                {"account_id": ap_account.id, "dare": 0, "avere": gross},
-            ]
+            rows = []
+            for i in range(len(descs)):
+                net_str = (nets[i] if i < len(nets) else "").strip()
+                if not net_str:
+                    continue  # riga vuota nel form, si ignora
+                net = float(net_str)
+                if net <= 0:
+                    raise ValueError(f"Riga {i+1}: l'imponibile deve essere positivo.")
+                rate = float(rates[i]) if i < len(rates) and rates[i] else 22.0
+                account_id = int(accounts_ids[i]) if i < len(accounts_ids) and accounts_ids[i] else None
+                center_id = int(centers_ids[i]) if i < len(centers_ids) and centers_ids[i] else None
+                if not account_id:
+                    raise ValueError(f"Riga {i+1}: seleziona un conto di costo.")
+                expense_account, cost_center = validate_co_assignment(account_id, center_id)
+                rows.append({
+                    "description": (descs[i] if i < len(descs) else "").strip(),
+                    "net": net, "vat": round(net * rate / 100, 2),
+                    "account_id": expense_account.id,
+                    "cost_center_id": cost_center.id if cost_center else None,
+                })
+
+            if not rows:
+                raise ValueError("Inserisci almeno una riga con conto di costo e importo.")
+
+            total_net = sum(r["net"] for r in rows)
+            total_vat = sum(r["vat"] for r in rows)
+            gross = total_net + total_vat
+
+            lines = [{"account_id": r["account_id"], "dare": r["net"], "avere": 0,
+                     "description": r["description"], "cost_center_id": r["cost_center_id"]} for r in rows]
+            if total_vat:
+                lines.append({"account_id": vat_account.id, "dare": round(total_vat, 2), "avere": 0})
+            lines.append({"account_id": ap_account.id, "dare": 0, "avere": round(gross, 2)})
 
             invoice_date = datetime.strptime(invoice_date_str, "%Y-%m-%d").date() if invoice_date_str else None
             entry = post_journal_entry(
                 doc_type="KR", prefix="19",
                 doc_date=invoice_date, description=description or f"Fattura Fornitore {invoice_number}",
                 lines=lines, source_module="LEDGER", reference=invoice_number,
-                created_by_id=current_user.id, economic_subject_id=vendor_id, gross_amount=gross,
+                created_by_id=current_user.id, economic_subject_id=vendor_id, gross_amount=round(gross, 2),
                 commit=False,
             )
             create_installments_for_invoice(entry)
             db.session.commit()
-            flash(f"Fattura fornitore registrata: Doc. {entry.doc_number} — Totale {gross:.2f} €.", "success")
+            flash(f"Fattura fornitore registrata: Doc. {entry.doc_number} — Totale {gross:.2f} € "
+                  f"({len(rows)} righe di costo).", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
         except (UnbalancedEntryError, ValueError, COValidationError) as e:
             db.session.rollback()
