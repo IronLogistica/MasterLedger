@@ -500,6 +500,26 @@ def rfqs():
     return render_template('mm/rfqs.html', rfqs=RequestForQuotation.query.order_by(RequestForQuotation.id.desc()).all(),
                            vendors=vendors, materials=materials, wms_needs=wms_needs, wms_error=wms_error)
 
+
+@mm_bp.route('/rfq/<int:rfq_id>/elimina', methods=['POST'])
+@login_required
+def rfq_elimina(rfq_id):
+    """Elimina una Richiesta di Preventivo — blocca se una delle offerte
+    ricevute è già stata trasformata in Ordine d'acquisto: elimina prima
+    quell'ordine (le altre offerte non selezionate si eliminano insieme
+    alla RFQ, in automatico)."""
+    from models import RequestForQuotation
+    rfq = RequestForQuotation.query.get_or_404(rfq_id)
+    if any(o.purchase_order_id is not None for o in rfq.offers):
+        flash(f"La RFQ {rfq.rfq_number} ha già un'offerta trasformata in Ordine d'acquisto — "
+              f"elimina prima quell'ordine.", "danger")
+        return redirect(url_for('mm.rfqs'))
+    rfq_number = rfq.rfq_number
+    db.session.delete(rfq)  # le offerte (SupplierQuotation) cascade
+    db.session.commit()
+    flash(f"Richiesta d'offerta {rfq_number} eliminata.", "success")
+    return redirect(url_for('mm.rfqs'))
+
 @mm_bp.route('/rfq/da-fabbisogni', methods=['POST'])
 @login_required
 def rfq_from_wms_needs():
