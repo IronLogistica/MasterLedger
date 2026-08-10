@@ -69,7 +69,7 @@ def _money(value, label):
 def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_module="LEDGER",
                        reference=None, created_by_id=None, economic_subject_id=None,
                        gross_amount=None, vat_rate=None, natura=None, commit=True,
-                       allow_inactive_accounts=False):
+                       allow_inactive_accounts=False, posting_date=None):
     """Crea una scrittura atomica dopo averne validato righe, conti e quadratura.
 
     Ogni riga deve avere un solo lato positivo (Dare oppure Avere). Importi
@@ -80,7 +80,10 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
     if not isinstance(lines, (list, tuple)) or len(lines) < 2:
         raise UnbalancedEntryError("Servono almeno due righe contabili.")
 
-    effective_date = doc_date or date.today()
+    # Il periodo contabile dipende dalla data di registrazione, non dalla data
+    # riportata sul DDT/fattura. I chiamanti storici senza posting_date
+    # mantengono il comportamento precedente.
+    effective_date = posting_date or doc_date or date.today()
     _check_period_open(effective_date)
 
     normalized = []
@@ -166,7 +169,7 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
         doc_number=doc_number,
         doc_type=doc_type,
         doc_date=doc_date or date.today(),
-        posting_date=date.today(),
+        posting_date=posting_date or date.today(),
         description=description,
         source_module=source_module,
         reference=reference,
