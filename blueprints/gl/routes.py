@@ -461,6 +461,30 @@ def scadenzario_paga():
         return redirect(url_for("gl.scadenzario"))
 
 
+@gl_bp.route("/giornale/ispezione-ai", methods=["POST"])
+@login_required
+def journal_ai_inspection():
+    """Ispezione AI del Libro Giornale dal 1° gennaio dell'anno corrente a
+    oggi — controllo di PATTERN (conti insoliti, centro di costo mancante,
+    possibili doppioni, descrizioni generiche), non un giudizio fiscale.
+    Ogni click è una scelta esplicita dell'utente: manda dati contabili
+    reali a OpenAI, non succede mai in automatico."""
+    from datetime import date
+    from services.ai_audit import ispeziona_giornale, AuditError
+
+    inizio_anno = date(date.today().year, 1, 1)
+    entries = (JournalEntry.query
+              .filter(JournalEntry.doc_date >= inizio_anno, JournalEntry.doc_date <= date.today())
+              .order_by(JournalEntry.doc_date.asc()).all())
+    try:
+        anomalie, riepilogo = ispeziona_giornale(entries)
+        return render_template("gl/ai_inspection_result.html", anomalie=anomalie, riepilogo=riepilogo,
+                               n_scritture=len(entries), inizio=inizio_anno, fine=date.today())
+    except AuditError as e:
+        flash(str(e), "danger")
+        return redirect(url_for("gl.journal_list"))
+
+
 @gl_bp.route("/mastrino/<int:account_id>")
 @login_required
 def mastrino_conto(account_id):
