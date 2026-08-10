@@ -47,7 +47,7 @@
   <div class="card-body">
     {% if billed %}
     <table class="masterledger-table">
-      <thead><tr><th>DDT</th><th>Cliente</th><th>Fattura</th><th class="td-num">Totale lordo €</th></tr></thead>
+      <thead><tr><th>DDT</th><th>Cliente</th><th>Fattura</th><th class="td-num">Totale lordo €</th><th></th></tr></thead>
       <tbody>
         {% for d in billed %}
         <tr>
@@ -55,6 +55,11 @@
           <td>{{ d.party.name }}</td>
           <td><a class="mono fw-bold" href="{{ url_for('gl.entry_detail', entry_id=d.billing_entry_id) }}">{{ d.billing_entry.doc_number }}</a></td>
           <td class="td-num">{{ '%.2f'|format(d.billing_entry.gross_amount or 0) }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('sd.fattura_elimina', entry_id=d.billing_entry_id) }}" style="display:inline;" onsubmit="return confirm('Eliminare definitivamente questa fattura? Il DDT tornerà disponibile per una nuova fatturazione.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px; color:var(--ml-red);">🗑️ Elimina</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
