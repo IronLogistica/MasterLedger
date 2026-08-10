@@ -799,6 +799,11 @@ class Delivery(db.Model):
     economic_subject_id = db.Column(db.Integer, db.ForeignKey("economic_subjects.id"), nullable=True)  # FIX: allineato alla migrazione reale (nullable=True), che non ha imposto NOT NULL sulle righe storiche
     cogs_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     billing_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
+    # Fatture da Emettere (rateo attivo) — valorizzato quando il DDT è stato
+    # spedito ma non ancora fatturato e si è generata la scrittura provvisoria
+    # di competenza. Stornata automaticamente quando arriva la fattura vera
+    # (billing()), per non contare il ricavo due volte.
+    accrual_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     # Vero quando MasterLogistic-WMS ha davvero confermato la giacenza al
