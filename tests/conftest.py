@@ -4,7 +4,7 @@ import pytest
 from app import create_app
 from config import Config
 from extensions import db
-from models import Account, AccountMapping, EconomicSubject, User
+from models import Account, AccountMapping, CostCenter, EconomicSubject, User
 
 
 class TestConfig(Config):
@@ -68,7 +68,8 @@ def app():
                                    indirizzo="Via Test 1", comune="Roma", cap="00100", provincia="RM", nazione="IT")
         supplier = EconomicSubject(code="F0001", name="Fornitore", is_supplier=True, piva="10987654321")
         supplier2 = EconomicSubject(code="F0002", name="Fornitore 2", is_supplier=True, piva="10987654322")
-        db.session.add_all([user, op, customer, supplier, supplier2])
+        cc = CostCenter(code="CC-TEST-01", name="Centro Test")
+        db.session.add_all([user, op, customer, supplier, supplier2, cc])
         db.session.commit()
         yield app
         db.session.remove()
@@ -94,4 +95,11 @@ def login(client, app):
 def account(app):
     def get(code):
         return Account.query.filter_by(code=code).one()
+    return get
+
+
+@pytest.fixture()
+def cost_center(app):
+    def get(code="CC-TEST-01"):
+        return CostCenter.query.filter_by(code=code).one()
     return get

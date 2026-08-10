@@ -15,25 +15,26 @@ from services.posting import post_journal_entry, reverse_journal_entry, PeriodCl
 from services.payments import allocate_payment, PaymentAllocationError
 
 
-def ap_form(vendor_id, expense_id, number="F-1", net="1000.00"):
+def ap_form(vendor_id, expense_id, cost_center_id, number="F-1", net="1000.00"):
     return {
         "vendor_id": str(vendor_id), "invoice_number": number, "invoice_date": "2026-08-09",
-        "net": net, "vat_rate": "22", "expense_account_id": str(expense_id),
+        "line_description[]": ["Test"], "line_net[]": [net], "line_vat_rate[]": ["22"],
+        "line_expense_account_id[]": [str(expense_id)], "line_cost_center_id[]": [str(cost_center_id)],
         "description": "Test",
     }
 
 
 # ── Fase 1: piano dei conti canonico ────────────────────────────────
 
-def test_account_mapping_seeded_and_used_by_ap(login, app, account):
+def test_account_mapping_seeded_and_used_by_ap(login, app, account, cost_center):
     with app.app_context():
         vendor = EconomicSubject.query.filter_by(code="F0001").one()
         expense = account("410000")
-        vid, eid = vendor.id, expense.id
+        vid, eid, cc = vendor.id, expense.id, cost_center().id
         mapping = AccountMapping.query.filter_by(concept_key="debiti_fornitori").one()
         assert mapping.account.code == "210000"
 
-    resp = login.post("/ap/supplier_invoice", data=ap_form(vid, eid), follow_redirects=False)
+    resp = login.post("/ap/supplier_invoice", data=ap_form(vid, eid, cc), follow_redirects=False)
     assert resp.status_code == 302
     with app.app_context():
         invoice = JournalEntry.query.filter_by(doc_type="KR").one()
@@ -118,13 +119,13 @@ def test_missing_period_is_open_unless_lock_enforced(app, account):
 
 # ── Fase 3: pagamenti parziali ───────────────────────────────────────
 
-def test_invoice_gets_single_installment_covering_full_amount(login, app, account):
+def test_invoice_gets_single_installment_covering_full_amount(login, app, account, cost_center):
     with app.app_context():
         vendor = EconomicSubject.query.filter_by(code="F0001").one()
         expense = account("410000")
-        vid, eid = vendor.id, expense.id
+        vid, eid, cc = vendor.id, expense.id, cost_center().id
 
-    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, number="F-10", net="1000.00"))
+    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, cc, number="F-10", net="1000.00"))
     with app.app_context():
         invoice = JournalEntry.query.filter_by(reference="F-10").one()
         installments = InvoiceInstallment.query.filter_by(entry_id=invoice.id).all()
@@ -132,13 +133,13 @@ def test_invoice_gets_single_installment_covering_full_amount(login, app, accoun
         assert installments[0].residual_amount == Decimal("1220.00")
 
 
-def test_partial_allocation_reduces_residual_without_settling(login, app, account):
+def test_partial_allocation_reduces_residual_without_settling(login, app, account, cost_center):
     with app.app_context():
         vendor = EconomicSubject.query.filter_by(code="F0002").one()
         expense = account("410000")
-        vid, eid = vendor.id, expense.id
+        vid, eid, cc = vendor.id, expense.id, cost_center().id
 
-    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, number="F-11", net="1000.00"))
+    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, cc, number="F-11", net="1000.00"))
     with app.app_context():
         invoice = JournalEntry.query.filter_by(reference="F-11").one()
         inst = InvoiceInstallment.query.filter_by(entry_id=invoice.id).one()
@@ -181,13 +182,13 @@ def test_allocation_over_residual_is_rejected(app, account):
             db.session.rollback()
 
 
-def test_reversal_of_one_partial_payment_does_not_touch_the_other(login, app, account):
+def test_reversal_of_one_partial_payment_does_not_touch_the_other(login, app, account, cost_center):
     with app.app_context():
         vendor = EconomicSubject.query.filter_by(code="F0002").one()
         expense = account("410000")
-        vid, eid = vendor.id, expense.id
+        vid, eid, cc = vendor.id, expense.id, cost_center().id
 
-    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, number="F-12", net="1000.00"))
+    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, cc, number="F-12", net="1000.00"))
     with app.app_context():
         invoice = JournalEntry.query.filter_by(reference="F-12").one()
         inst = InvoiceInstallment.query.filter_by(entry_id=invoice.id).one()
@@ -213,13 +214,13 @@ def test_reversal_of_one_partial_payment_does_not_touch_the_other(login, app, ac
         assert first_alloc is not None and first_alloc.reversed is False
 
 
-def test_abbuono_line_keeps_entry_balanced(login, app, account):
+def test_abbuono_line_keeps_entry_balanced(login, app, account, cost_center):
     with app.app_context():
         vendor = EconomicSubject.query.filter_by(code="F0001").one()
         expense = account("410000")
-        vid, eid = vendor.id, expense.id
+        vid, eid, cc = vendor.id, expense.id, cost_center().id
 
-    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, number="F-13", net="1000.00"))
+    login.post("/ap/supplier_invoice", data=ap_form(vid, eid, cc, number="F-13", net="1000.00"))
     with app.app_context():
         invoice = JournalEntry.query.filter_by(reference="F-13").one()
         inst = InvoiceInstallment.query.filter_by(entry_id=invoice.id).one()
