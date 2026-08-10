@@ -8,7 +8,7 @@
       fatture Fattura cliente di questo cliente. Vanno compilati una sola volta.
     </div>
 
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Partita IVA <span style="font-weight:400;">(11 cifre)</span></label>

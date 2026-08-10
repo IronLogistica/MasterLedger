@@ -9,6 +9,7 @@
       <th style="width:10%;">Aliquota</th>
       <th style="width:20%;">Natura <span style="font-weight:400;">(solo 0%)</span></th>
       <th style="width:20%;">Conto Ricavi <span class="req">*</span></th>
+      <th style="width:16%;">Centro <span style="font-weight:400;">(facoltativo)</span></th>
       <th style="width:4%;"></th>
     </tr>
   </thead>
@@ -36,6 +37,12 @@
         <select name="line_account_id[]">
           <option value="">-- Seleziona --</option>
           {% for a in revenue_accounts %}<option value="{{ a.id }}">{{ a.code }} — {{ a.name }}</option>{% endfor %}
+        </select>
+      </td>
+      <td>
+        <select name="line_cost_center_id[]">
+          <option value="">— nessuno —</option>
+          {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
         </select>
       </td>
       <td><button type="button" class="btn" onclick="removeLine(this)" title="Rimuovi riga">✕</button></td>

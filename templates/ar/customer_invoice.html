@@ -16,7 +16,7 @@
         <a href="{{ url_for('ar.customer_fiscali', customer_id=c.id) }}">{{ c.code }}</a>{{ ", " if not loop.last else "" }}
       {% endfor %}
     </div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Cliente <span class="req">*</span></label>

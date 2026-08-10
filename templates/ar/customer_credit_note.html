@@ -10,7 +10,7 @@
       qualificare la nota di credito, come da tracciato FatturaPA. Se indichi la fattura originale,
       il riferimento finisce nel blocco <strong>DatiFattureCollegate</strong>.
     </div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Cliente <span class="req">*</span></label>

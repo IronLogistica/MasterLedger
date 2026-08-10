@@ -5,7 +5,7 @@
   <div class="card-body">
     <div class="info-box">Seleziona le fatture aperte da incassare. Genera: <strong>Dare</strong> Banca c/c, <strong>Avere</strong> Crediti v/Clienti.</div>
     {% if open_invoices %}
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <table class="masterledger-table">
         <thead><tr><th></th><th>Documento</th><th>Cliente</th><th>Data</th><th class="td-num">Importo</th></tr></thead>
         <tbody>
