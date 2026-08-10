@@ -485,6 +485,59 @@ def journal_ai_inspection():
         return redirect(url_for("gl.journal_list"))
 
 
+@gl_bp.route("/centri-di-costo")
+@login_required
+def cost_centers_list():
+    """Elenco centri di costo/ricavo — punto di accesso a ciascun mastrino
+    per centro (verifica che le registrazioni li movimentino davvero)."""
+    centers = CostCenter.query.order_by(CostCenter.code).all()
+    totali = {}
+    for c in centers:
+        righe = JournalLine.query.join(JournalEntry).filter(
+            JournalLine.cost_center_id == c.id, JournalEntry.is_reversed.is_(False)
+        ).all()
+        totali[c.id] = {
+            "n_movimenti": len(righe),
+            "totale_costi": sum((float(r.dare) for r in righe if r.account.account_type == "costo"), 0.0),
+            "totale_ricavi": sum((float(r.avere) for r in righe if r.account.account_type == "ricavo"), 0.0),
+        }
+    return render_template("gl/cost_centers_list.html", centers=centers, totali=totali)
+
+
+@gl_bp.route("/centro/<int:center_id>")
+@login_required
+def cost_center_ledger(center_id):
+    """Mastrino per Centro di Costo/Ricavo — tutti i movimenti (di qualunque
+    modulo) che hanno questo centro assegnato, in ordine cronologico. Stesso
+    principio del Mastrino conto: qui verifichi che le registrazioni
+    agiscano DAVVERO sui centri, non solo che il campo esista nel form."""
+    center = CostCenter.query.get_or_404(center_id)
+    date_from = request.args.get("date_from") or None
+    date_to = request.args.get("date_to") or None
+
+    query = (JournalLine.query.join(JournalEntry)
+            .filter(JournalLine.cost_center_id == center_id, JournalEntry.is_reversed.is_(False)))
+    if date_from:
+        try:
+            query = query.filter(JournalEntry.doc_date >= datetime.strptime(date_from, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            query = query.filter(JournalEntry.doc_date <= datetime.strptime(date_to, "%Y-%m-%d").date())
+        except ValueError:
+            pass
+    righe = query.order_by(JournalEntry.doc_date.asc(), JournalEntry.id.asc()).all()
+
+    totale_costi = sum((float(r.dare) for r in righe if r.account.account_type == "costo"), 0.0)
+    totale_ricavi = sum((float(r.avere) for r in righe if r.account.account_type == "ricavo"), 0.0)
+
+    return render_template("gl/cost_center_ledger.html", center=center, righe=righe,
+                           totale_costi=totale_costi, totale_ricavi=totale_ricavi,
+                           margine=totale_ricavi - totale_costi,
+                           filters={"date_from": date_from, "date_to": date_to})
+
+
 @gl_bp.route("/mastrino/<int:account_id>")
 @login_required
 def mastrino_conto(account_id):
