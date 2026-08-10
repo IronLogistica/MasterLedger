@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🔍</span> Ispezione AI — Libro Giornale <span class="tx-code">{{ inizio.strftime("%d/%m/%Y") }} — {{ fine.strftime("%d/%m/%Y") }}</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Controllo di <strong>pattern</strong> su {{ n_scritture }} scritture — conti insoliti, centro di costo
+      mancante, possibili doppioni, descrizioni troppo generiche. <strong>Non è un controllo fiscale</strong>:
+      ogni segnalazione va verificata da una persona, non è un verdetto.
+    </div>
+
+    <p style="font-size:15px; margin: 16px 0;"><strong>Esito:</strong> {{ riepilogo or "—" }}</p>
+
+    {% if anomalie %}
+    <table class="masterledger-table">
+      <thead><tr><th>Documento</th><th>Gravità</th><th>Motivo</th></tr></thead>
+      <tbody>
+        {% for a in anomalie %}
+        <tr>
+          <td class="mono"><a href="{{ url_for('gl.journal_list', doc_type='') }}">{{ a.doc_number }}</a></td>
+          <td>
+            {% if a.gravita == 'alta' %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Alta</span>
+            {% elif a.gravita == 'media' %}<span class="status-badge status-open">Media</span>
+            {% else %}<span class="status-badge" style="background: rgba(150,150,150,.2); color: #bbb;">Bassa</span>{% endif %}
+          </td>
+          <td>{{ a.motivo }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Nessuna anomalia di pattern segnalata.</div>
+    {% endif %}
+
+    <p style="margin-top:20px;"><a class="btn btn-ghost" href="{{ url_for('gl.journal_list') }}">← Torna al Giornale</a></p>
+  </div>
+</div>
+{% endblock %}
