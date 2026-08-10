@@ -55,4 +55,30 @@
     {% else %}<div class="empty-state">Nessun ordine con merce ricevuta in attesa di fattura.<br>Il match richiede prima un'<a href="{{ url_for('mm.goods_receipts') }}">Entrata Merci</a>.</div>{% endif %}
   </div>
 </div>
+
+<div class="card">
+  <div class="card-header">✅ Verifiche Fattura registrate (ultime 30)</div>
+  <div class="card-body">
+    {% if verified %}
+    <table class="masterledger-table">
+      <thead><tr><th>Scrittura</th><th>Data</th><th>Fornitore</th><th class="td-num">Totale €</th><th></th></tr></thead>
+      <tbody>
+        {% for v in verified %}
+        <tr>
+          <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=v.id) }}">{{ v.doc_number }}</a></td>
+          <td>{{ v.doc_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ v.economic_subject.name if v.economic_subject else "—" }}</td>
+          <td class="td-num">{{ '%.2f'|format(v.gross_amount or 0) }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('mm.invoice_verification_elimina', entry_id=v.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare definitivamente questa Verifica Fattura? Le quantità fatturate sull\'ordine torneranno disponibili.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px; color:var(--ml-red);">🗑️ Elimina</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Ancora nessuna Verifica Fattura registrata.</div>{% endif %}
+  </div>
+</div>
 {% endblock %}
