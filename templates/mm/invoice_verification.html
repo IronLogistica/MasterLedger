@@ -39,6 +39,13 @@
           <div class="form-grid" style="margin-bottom:10px;">
             <div class="form-group"><label>Riferimento fattura fornitore</label><input type="text" name="invoice_ref" placeholder="es. FT 2026/00123"></div>
             <div class="form-group"><label>Aliquota IVA %</label><input type="number" step="0.01" name="vat_rate" value="22"></div>
+            <div class="form-group">
+              <label>Centro di Costo/Ricavo <span style="font-weight:400;">(solo se scatta una varianza prezzo)</span></label>
+              <select name="cost_center_id">
+                <option value="">— nessuno —</option>
+                {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+              </select>
+            </div>
           </div>
           <button class="btn btn-success" type="submit">Esegui Three-Way Match e Registra</button>
         </form>
