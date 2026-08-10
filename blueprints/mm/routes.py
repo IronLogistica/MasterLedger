@@ -24,10 +24,11 @@ from flask_login import login_required, current_user
 
 from extensions import db
 from models import (
-    Account, EconomicSubject, Material, PurchaseOrder, PurchaseOrderLine,
+    Account, CostCenter, EconomicSubject, Material, PurchaseOrder, PurchaseOrderLine,
     GoodsReceipt, GoodsReceiptLine,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.co import validate_co_assignment, COValidationError
 from services.reversals import reverse_goods_receipt, ReversalError
 
 mm_bp = Blueprint("mm", __name__, template_folder="../../templates/mm")
@@ -216,6 +217,7 @@ def invoice_verification():
 
         invoice_ref = request.form.get("invoice_ref", "").strip()
         vat_rate = Decimal(str(request.form.get("vat_rate", type=float) or 22))
+        cost_center_id = request.form.get("cost_center_id", type=int)
 
         try:
             # ── THREE-WAY MATCH: Ordinato vs Ricevuto vs Fatturato ──
@@ -257,6 +259,14 @@ def invoice_verification():
                     flash(f"⛔ {b}", "danger")
                 return redirect(url_for("mm.invoice_verification"))
 
+            # Il centro di costo/ricavo serve SOLO se scatta una varianza
+            # prezzo (conto 460000, cost_relevant) — se fattura e ordine
+            # coincidono esattamente, quella riga non nasce e non serve.
+            ha_varianza = any(r["price"] != Decimal(str(r["line"].price)) for r in match_rows)
+            variance_cost_center = None
+            if ha_varianza:
+                _, variance_cost_center = validate_co_assignment(_acc("460000").id, cost_center_id)
+
             # ── Registrazione: Dare EM-RF (al prezzo ORDINE, per chiuderlo esattamente)
             # + Dare/Avere Varianza Prezzo Materiali (differenza vs prezzo FATTURA)
             # + Dare IVA / Avere Fornitore (al prezzo FATTURA, quello davvero dovuto) ──
@@ -280,11 +290,13 @@ def invoice_verification():
                 if varianza > 0:
                     journal_lines.append({"account_id": variance_acc.id, "dare": varianza, "avere": 0,
                                           "description": f"Varianza prezzo sfavorevole {l.material.code} "
-                                                          f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)"})
+                                                          f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)",
+                                          "cost_center_id": variance_cost_center.id if variance_cost_center else None})
                 elif varianza < 0:
                     journal_lines.append({"account_id": variance_acc.id, "dare": 0, "avere": -varianza,
                                           "description": f"Varianza prezzo favorevole {l.material.code} "
-                                                          f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)"})
+                                                          f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)",
+                                          "cost_center_id": variance_cost_center.id if variance_cost_center else None})
 
                 l.qty_invoiced = Decimal(str(l.qty_invoiced or 0)) + r["qty"]
             total_vat = (total_net_invoice * vat_rate / 100).quantize(Decimal("0.01"))
@@ -313,7 +325,8 @@ def invoice_verification():
         return redirect(url_for("mm.invoice_verification"))
 
     return render_template("mm/invoice_verification.html", pos=pos,
-                           tolerance=float(PRICE_TOLERANCE_PCT))
+                           tolerance=float(PRICE_TOLERANCE_PCT),
+                           cost_centers=CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all())
 
 # ══════════════════════════════════════════════════════════════
 # RFQ — richiesta d'offerta → confronto → flag selezione → OA
