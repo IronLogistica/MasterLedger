@@ -40,8 +40,8 @@
     <div class="sidebar-title">Acquisti (MM) — Three-Way Match</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.rfqs' }}" href="{{ url_for('mm.rfqs') }}">📨 Richieste di preventivo (RFQ)</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.purchase_orders' }}" href="{{ url_for('mm.purchase_orders') }}">📦 Ordini d'acquisto</a>
-    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.goods_receipts' }}" href="{{ url_for('mm.goods_receipts') }}">📥 Entrata merci</a>
-    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.invoice_verification' }}" href="{{ url_for('mm.invoice_verification') }}">🔍 Verifica fattura <span class="badge">3-way</span></a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.goods_receipts' }}" href="{{ url_for('mm.goods_receipts') }}">📥 MIGO — Entrata merci</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.invoice_verification' }}" href="{{ url_for('mm.invoice_verification') }}">🔍 MIRO — Verifica fattura <span class="badge">3-way</span></a>
 
     <div class="sidebar-title">Produzione (ponte verso MasterProduction)</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.completata' }}" href="{{ url_for('production.completata') }}">🏭 Produzione Completata (COGM)</a>
