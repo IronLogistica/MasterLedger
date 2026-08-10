@@ -925,6 +925,21 @@ class GoodsReceiptLine(db.Model):
     po_line = db.relationship("PurchaseOrderLine")
 
 
+class InvoiceVerificationLine(db.Model):
+    """Riga di dettaglio della Verifica Fattura (MIRO/three-way match) —
+    stesso ruolo di GoodsReceiptLine ma per la fattura fornitore: senza
+    questa tabella non c'era modo di sapere, dato un KR generato da MM,
+    quali righe ordine e quali quantità aveva davvero fatturato — quindi
+    nessun modo sicuro di ripristinare qty_invoiced se il documento
+    veniva eliminato. Popolata da blueprints/mm/routes.py, invoice_verification()."""
+    __tablename__ = "invoice_verification_lines"
+    id = db.Column(db.Integer, primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
+    po_line_id = db.Column(db.Integer, db.ForeignKey("purchase_order_lines.id"), nullable=False)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    po_line = db.relationship("PurchaseOrderLine")
+
+
 # ══════════════════════════════════════════════════════════════
 # PRODUZIONE COMPLETATA (COGM) — soluzione PONTE finché non c'è
 # MasterProduction. Registrazione periodica (tipicamente mensile) del
