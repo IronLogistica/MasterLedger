@@ -363,7 +363,7 @@ def deliveries():
 
     if request.method == "POST":
         order_id = request.form.get("order_id", type=int)
-        cost_center_id = request.form.get("cost_center_id", type=int)
+        cost_center_id_default = request.form.get("cost_center_id", type=int)  # riserva: usato solo se una riga non ha il suo
         o = SalesOrder.query.get(order_id)
         if o is None:
             flash("Ordine non trovato.", "danger")
@@ -424,12 +424,15 @@ def deliveries():
 
             # ── PGI: scarico giacenza + scrittura COGS ───────
             # Il Costo del Venduto (450000) è CO-rilevante — il centro di
-            # costo/ricavo è quindi richiesto qui, sempre (a differenza di
-            # AM dove serve solo in caso di varianza prezzo).
-            cogs_acc, cogs_cost_center = validate_co_assignment(_acc("450000").id, cost_center_id)
+            # costo/ricavo è richiesto PER RIGA: un DDT multi-articolo può
+            # avere articoli diversi che vanno spesati su centri diversi
+            # (es. reparto Produzione per uno, Servizi per un altro).
+            cogs_acc = _acc("450000")
             journal_lines = []
             total_cogs = Decimal("0")
             for l, qty in to_ship:
+                riga_cc_id = request.form.get(f"cost_center_id_{l.id}", type=int) or cost_center_id_default
+                _, riga_cost_center = validate_co_assignment(cogs_acc.id, riga_cc_id)
                 unit_cost = Decimal(str(l.material.standard_cost))
                 line_cogs = (qty * unit_cost).quantize(Decimal("0.01"))
                 db.session.add(DeliveryLine(delivery_id=d.id, material_id=l.material_id,
@@ -443,7 +446,7 @@ def deliveries():
                     inv_acc = _acc(l.material.inventory_account_code)
                     journal_lines.append({"account_id": cogs_acc.id, "dare": line_cogs, "avere": 0,
                                           "description": f"COGS {l.material.code} × {float(qty):.0f}",
-                                          "cost_center_id": cogs_cost_center.id if cogs_cost_center else None})
+                                          "cost_center_id": riga_cost_center.id if riga_cost_center else None})
                     journal_lines.append({"account_id": inv_acc.id, "dare": 0, "avere": line_cogs,
                                           "description": f"Scarico {l.material.code}"})
                     total_cogs += line_cogs
@@ -468,8 +471,18 @@ def deliveries():
         return redirect(url_for("sd.deliveries"))
 
     delivery_list = Delivery.query.order_by(Delivery.id.desc()).all()
+    # Righe aperte di ogni ordine, per popolare via JS la tabella "un
+    # centro per riga" quando l'operatore sceglie l'ordine da consegnare.
+    order_lines_json = {
+        o.id: [
+            {"line_id": l.id, "code": l.material.code, "description": l.material.description,
+             "residual": float(Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0)))}
+            for l in o.lines if Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0)) > 0
+        ] for o in open_orders
+    }
     return render_template("sd/deliveries.html", deliveries=delivery_list,
-                           open_orders=open_orders, cost_centers=cost_centers)
+                           open_orders=open_orders, cost_centers=cost_centers,
+                           order_lines_json=order_lines_json)
 
 
 @sd_bp.route("/deliveries/<int:delivery_id>/reverse", methods=["POST"])
@@ -499,11 +512,16 @@ def _revenue_account_for_delivery(d):
     return _acc("4000"), channel
 
 
-def _genera_rateo_ddt(d, cost_center_id=None):
+def _genera_rateo_ddt(d, cost_center_id=None, cost_center_ids=None):
     """Genera la scrittura provvisoria di competenza per un DDT spedito ma
     non ancora fatturato: Dare Fatture da Emettere / Avere Ricavi (SENZA
     IVA — non è ancora dovuta, non esiste una vera fattura). Va SEMPRE
-    stornata quando arriva la fattura reale (vedi billing())."""
+    stornata quando arriva la fattura reale (vedi billing()).
+
+    cost_center_ids: dict {delivery_line_id: cost_center_id} per un centro
+    diverso per riga (generazione singola); se assente o una riga non è
+    presente nel dict, si usa cost_center_id come riserva unica (usato
+    dalla generazione massiva, dove non c'è un form per riga)."""
     if d.cogs_entry_id is None:
         raise ValueError(f"DDT {d.doc_number}: nessuna Uscita Merci collegata, non generabile.")
     if d.billing_entry_id is not None:
@@ -513,16 +531,18 @@ def _genera_rateo_ddt(d, cost_center_id=None):
 
     fde_acc = AccountMapping.get_or_error("fatture_da_emettere")
     rev_acc, channel = _revenue_account_for_delivery(d)
-    cost_center = CostCenter.query.get(cost_center_id) if cost_center_id else None
+    cost_center_ids = cost_center_ids or {}
 
     total_net = Decimal("0")
     journal_lines = []
     for l in d.lines:
         net = (Decimal(str(l.qty)) * Decimal(str(l.price))).quantize(Decimal("0.01"))
         total_net += net
+        riga_cc_id = cost_center_ids.get(l.id) or cost_center_id
+        riga_cc = CostCenter.query.get(riga_cc_id) if riga_cc_id else None
         journal_lines.append({"account_id": rev_acc.id, "dare": 0, "avere": net,
                               "description": f"Rateo — {l.material.code} - {l.material.description}",
-                              "cost_center_id": cost_center.id if cost_center else None})
+                              "cost_center_id": riga_cc.id if riga_cc else None})
     journal_lines.insert(0, {"account_id": fde_acc.id, "dare": total_net, "avere": 0})
 
     entry = post_journal_entry(
@@ -558,9 +578,14 @@ def fatture_da_emettere():
 @login_required
 def fatture_da_emettere_genera(delivery_id):
     d = Delivery.query.get_or_404(delivery_id)
-    cost_center_id = request.form.get("cost_center_id", type=int)
+    cost_center_id = request.form.get("cost_center_id", type=int)  # riserva
+    cost_center_ids = {}
+    for l in d.lines:
+        v = request.form.get(f"cost_center_id_{l.id}", type=int)
+        if v:
+            cost_center_ids[l.id] = v
     try:
-        entry = _genera_rateo_ddt(d, cost_center_id)
+        entry = _genera_rateo_ddt(d, cost_center_id, cost_center_ids)
         db.session.commit()
         flash(f"Rateo generato per DDT {d.doc_number}: Doc. {entry.doc_number} — "
               f"{float(entry.gross_amount):.2f} € di ricavo di competenza.", "success")
@@ -634,8 +659,7 @@ def billing():
             flash(f"Il DDT {d.doc_number} è già stato fatturato.", "warning")
             return redirect(url_for("sd.billing"))
 
-        cost_center_id = request.form.get("cost_center_id", type=int)
-        cost_center = CostCenter.query.get(cost_center_id) if cost_center_id else None
+        cost_center_id_default = request.form.get("cost_center_id", type=int)  # riserva, se una riga non ha il suo
 
         try:
             # Se esisteva già un rateo di competenza (Fatture da Emettere)
@@ -675,9 +699,11 @@ def billing():
                 vat = (net * Decimal(str(l.material.vat_rate)) / 100).quantize(Decimal("0.01"))
                 total_net += net
                 total_vat += vat
+                riga_cc_id = request.form.get(f"cost_center_id_{l.id}", type=int) or cost_center_id_default
+                riga_cc = CostCenter.query.get(riga_cc_id) if riga_cc_id else None
                 journal_lines.append({"account_id": rev_acc.id, "dare": 0, "avere": net,
                                       "description": f"{l.material.code} - {l.material.description}",
-                                      "cost_center_id": cost_center.id if cost_center else None})
+                                      "cost_center_id": riga_cc.id if riga_cc else None})
                 # Caratteri ASCII semplici SOLO qui: questa stringa finisce
                 # verbatim nel campo <Descrizione> dell'XML FatturaPA (vedi
                 # services/fatturapa.py). Em-dash (—), simbolo moltiplicazione
