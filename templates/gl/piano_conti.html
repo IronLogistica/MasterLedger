@@ -7,6 +7,9 @@
       Elenco completo di TUTTI i conti presenti nel database (attivi e non), raggruppati per tipo — usalo per
       verificare cosa c'è davvero, senza doverlo dedurre dal menu a tendina della Prima Nota. Se dopo un deploy
       manca qualcosa qui, il problema è a monte (migrazione o <code>flask seed</code> non ancora eseguiti).
+      <br><strong>Clicca su un codice o un nome conto qui sotto per aprire il suo Mastrino</strong> — tutti i
+      movimenti di quel conto, in ordine cronologico, con saldo progressivo: è lì che verifichi se le
+      registrazioni sono perfette.
     </div>
 
     {% for tipo in ordine_tipi %}
