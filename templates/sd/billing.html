@@ -23,15 +23,30 @@
           <td class="mono">{{ d.order.doc_number }}</td>
           <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
           <td>
-            <form method="POST" style="display:flex; gap:6px; align-items:center;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <form method="POST" style="display:inline-block;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="delivery_id" value="{{ d.id }}">
-              <select name="cost_center_id" style="font-size:11px; padding:3px;">
-                <option value="">— nessun centro —</option>
-                {% for cc in cost_centers %}
-                <option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>
-                {% endfor %}
-              </select>
-              <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">→ Crea Fattura</button>
+              <details>
+                <summary class="btn btn-success" style="display:inline;">→ Crea Fattura</summary>
+                <table class="masterledger-table" style="margin-top:8px; margin-bottom:8px;">
+                  <thead><tr><th>Codice</th><th>Descrizione</th><th class="td-num">Imponibile €</th><th>Centro Ricavo</th></tr></thead>
+                  <tbody>
+                    {% for l in d.lines %}
+                    <tr>
+                      <td class="mono">{{ l.material.code }}</td>
+                      <td>{{ l.material.description }}</td>
+                      <td class="td-num">{{ "%.2f"|format(l.qty * l.price) }}</td>
+                      <td>
+                        <select name="cost_center_id_{{ l.id }}" style="font-size:11px; padding:3px;">
+                          <option value="">— nessun centro —</option>
+                          {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+                        </select>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+                <button type="submit" class="btn btn-success">Conferma e registra fattura</button>
+              </details>
             </form>
           </td>
         </tr>
