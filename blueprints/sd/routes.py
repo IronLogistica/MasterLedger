@@ -23,7 +23,7 @@ from flask_login import login_required, current_user
 
 from extensions import db
 from models import (
-    Account, EconomicSubject, Material, Quotation, QuotationLine,
+    Account, AccountMapping, CostCenter, EconomicSubject, Material, Quotation, QuotationLine,
     SalesOrder, SalesOrderLine, Delivery, DeliveryLine, InvoiceLine,
     JournalEntry,
 )
@@ -331,6 +331,7 @@ def deliveries_reverse(delivery_id):
 @login_required
 def billing():
     to_bill = Delivery.query.filter_by(billing_entry_id=None).order_by(Delivery.id.desc()).all()
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
 
     if request.method == "POST":
         delivery_id = request.form.get("delivery_id", type=int)
@@ -342,9 +343,12 @@ def billing():
             flash(f"Il DDT {d.doc_number} è già stato fatturato.", "warning")
             return redirect(url_for("sd.billing"))
 
+        cost_center_id = request.form.get("cost_center_id", type=int)
+        cost_center = CostCenter.query.get(cost_center_id) if cost_center_id else None
+
         try:
-            ar_acc = _acc("140000")
-            vat_acc = _acc("170000")
+            ar_acc = AccountMapping.get_or_error("crediti_clienti")
+            vat_acc = AccountMapping.get_or_error("iva_debito")
             # Conto ricavi scelto in base al canale del cliente: 'subappalto'
             # (lavori per conto di un appaltatore principale) → 4000,
             # 'affidamento_diretto' (grande committente senza intermediari)
@@ -371,7 +375,8 @@ def billing():
                 total_net += net
                 total_vat += vat
                 journal_lines.append({"account_id": rev_acc.id, "dare": 0, "avere": net,
-                                      "description": f"{l.material.code} - {l.material.description}"})
+                                      "description": f"{l.material.code} - {l.material.description}",
+                                      "cost_center_id": cost_center.id if cost_center else None})
                 # Caratteri ASCII semplici SOLO qui: questa stringa finisce
                 # verbatim nel campo <Descrizione> dell'XML FatturaPA (vedi
                 # services/fatturapa.py). Em-dash (—), simbolo moltiplicazione
@@ -411,7 +416,7 @@ def billing():
 
     billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None)) \
                            .order_by(Delivery.id.desc()).limit(30).all()
-    return render_template("sd/billing.html", to_bill=to_bill, billed=billed)
+    return render_template("sd/billing.html", to_bill=to_bill, billed=billed, cost_centers=cost_centers)
 
 
 # ══════════════════════════════════════════════════════════════
