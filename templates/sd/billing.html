@@ -8,6 +8,8 @@
       La fattura nasce <strong>dal DDT</strong> (fatturazione differita): riprende righe, quantità e prezzi
       della consegna e registra <span class="mono">Dare Crediti / Avere Ricavi + IVA a Debito</span>.
       Il documento è un normale <strong>DR</strong>: lo ritrovi in Incassi clienti e puoi generare l'XML FatturaPA.
+      Il centro di costo/profitto è <strong>facoltativo</strong> sui ricavi (obbligatorio solo sui costi) — usalo
+      se vuoi tracciare da quale reparto/commessa nasce quel ricavo.
     </div>
     {% if to_bill %}
     <table class="masterledger-table">
@@ -21,8 +23,14 @@
           <td class="mono">{{ d.order.doc_number }}</td>
           <td class="td-num">{{ '%.2f'|format(d.total_net) }}</td>
           <td>
-            <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <form method="POST" style="display:flex; gap:6px; align-items:center;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="delivery_id" value="{{ d.id }}">
+              <select name="cost_center_id" style="font-size:11px; padding:3px;">
+                <option value="">— nessun centro —</option>
+                {% for cc in cost_centers %}
+                <option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>
+                {% endfor %}
+              </select>
               <button class="btn btn-success" style="padding:4px 10px;font-size:11.5px;">→ Crea Fattura</button>
             </form>
           </td>
