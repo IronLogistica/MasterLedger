@@ -19,6 +19,13 @@
           {% endfor %}
         </select>
       </div>
+      <div class="form-group" style="max-width:520px;">
+        <label>Centro di Costo/Ricavo <span class="req">*</span> <span style="font-weight:400;">(obbligatorio — il Costo del Venduto è CO-rilevante)</span></label>
+        <select name="cost_center_id" required>
+          <option value="">— seleziona —</option>
+          {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+        </select>
+      </div>
       <div class="btn-row"><button class="btn btn-primary" type="submit">Registra DDT + Uscita Merci</button></div>
     </form>
   </div>
