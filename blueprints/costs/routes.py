@@ -22,16 +22,21 @@ def cost_centers():
 def cost_center_new():
     code = request.form.get("code", "").strip()
     name = request.form.get("name", "").strip()
+    next_url = request.form.get("next") or url_for("costs.cost_centers")
+    # Redirect solo verso un percorso locale relativo — mai verso un altro
+    # host (protezione open-redirect, stesso principio già in blueprints/auth).
+    if not next_url.startswith("/"):
+        next_url = url_for("costs.cost_centers")
     if not code or not name:
         flash("Codice e nome Centro di costo obbligatori.", "danger")
-        return redirect(url_for("costs.cost_centers"))
+        return redirect(next_url)
     if CostCenter.query.filter_by(code=code).first():
         flash(f"Il Centro di costo {code} esiste già.", "danger")
-        return redirect(url_for("costs.cost_centers"))
+        return redirect(next_url)
     db.session.add(CostCenter(code=code, name=name))
     db.session.commit()
     flash(f"Centro di costo {code} — {name} creato (Centri di costo).", "success")
-    return redirect(url_for("costs.cost_centers"))
+    return redirect(next_url)
 
 
 def _parse_date(value, field_name):
