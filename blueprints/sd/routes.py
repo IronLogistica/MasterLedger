@@ -143,13 +143,33 @@ def _elimina_pagamenti_orfani(entry_ids_da_eliminare):
             ~JournalEntry.id.in_(entry_ids_da_eliminare)
         ).first() is not None
         if not ancora_usato and not ancora_paga_altro:
+            # Scollega PRIMA i riferimenti dalle fatture che stiamo per
+            # eliminare (anche loro puntano a peid via paid_by_entry_id) —
+            # senza questo, Postgres rifiuta la cancellazione per il
+            # vincolo di chiave esterna, esattamente come già successo
+            # sul cogs_entry_id di Delivery.
+            JournalEntry.query.filter(
+                JournalEntry.id.in_(entry_ids_da_eliminare),
+                JournalEntry.paid_by_entry_id == peid
+            ).update({"paid_by_entry_id": None}, synchronize_session=False)
+            db.session.flush()
             JournalLine.query.filter_by(entry_id=peid).delete(synchronize_session=False)
             JournalEntry.query.filter_by(id=peid).delete(synchronize_session=False)
 
 
 def _elimina_scrittura_sd(entry_id):
     """Elimina una scrittura SD (Fattura da DDT o Costo del Venduto) e
-    tutto ciò che ne dipende, gestendo con cautela eventuali pagamenti."""
+    tutto ciò che ne dipende, gestendo con cautela eventuali pagamenti.
+    Blocca se la scrittura è coinvolta in uno storno (originale o storno
+    stesso): eliminarla lascerebbe un riferimento rotto sull'altro lato,
+    stesso tipo di violazione già vista sul collegamento DDT→COGS."""
+    entry = JournalEntry.query.get(entry_id)
+    if entry is None:
+        return
+    if entry.is_reversed or entry.reversed_by_id or entry.reverses_id:
+        raise ValueError(
+            f"Il documento {entry.doc_number} è collegato a uno storno — non eliminabile da qui."
+        )
     _elimina_pagamenti_orfani([entry_id])
     InvoiceInstallment.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
     InvoiceLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
@@ -171,7 +191,13 @@ def fattura_elimina(entry_id):
     delivery = Delivery.query.filter_by(billing_entry_id=entry.id).first()
     if delivery:
         delivery.billing_entry_id = None
-    _elimina_scrittura_sd(entry.id)
+        db.session.flush()  # scollega davvero prima del delete, non fidarsi dell'autoflush implicito
+    try:
+        _elimina_scrittura_sd(entry.id)
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), "danger")
+        return redirect(url_for("sd.billing"))
     db.session.commit()
     flash(f"Fattura {doc_number} eliminata. Il DDT collegato torna disponibile per una nuova fatturazione.", "success")
     return redirect(url_for("sd.billing"))
@@ -186,8 +212,17 @@ def delivery_elimina(delivery_id):
         flash(f"Il DDT {d.doc_number} è già fatturato — elimina prima la fattura collegata.", "danger")
         return redirect(url_for("sd.deliveries"))
     doc_number = d.doc_number
-    if d.cogs_entry_id:
-        _elimina_scrittura_sd(d.cogs_entry_id)
+    cogs_entry_id = d.cogs_entry_id
+    d.cogs_entry_id = None  # scollega PRIMA di eliminare la scrittura — Postgres
+    db.session.flush()      # applica subito l'UPDATE, altrimenti il vincolo di
+                             # chiave esterna blocca la cancellazione della scrittura
+    if cogs_entry_id:
+        try:
+            _elimina_scrittura_sd(cogs_entry_id)
+        except ValueError as e:
+            db.session.rollback()
+            flash(str(e), "danger")
+            return redirect(url_for("sd.deliveries"))
     for dl_line in d.lines:
         so_line = SalesOrderLine.query.filter_by(order_id=d.order_id, material_id=dl_line.material_id).first()
         if so_line is not None:
