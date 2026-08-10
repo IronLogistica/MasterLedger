@@ -1,864 +1,596 @@
+"""
+blueprints/sd/routes.py — Ciclo attivo in stile SAP SD.
+
+Flusso documenti (copy control):
+    Preventivo (VA21)  →  Ordine cliente (VA01)  →  DDT / Uscita merci (VL01N)
+                                                        │  PGI: scarico giacenza +
+                                                        │  Dare Costo del Venduto
+                                                        │  Avere Magazzino
+                                                        ▼
+                                                    Fattura (VF01) — doc DR
+                                                    integrata con AR e FatturaPA
+
+Il COSTO DEL VENDUTO viene registrato AL MOMENTO DELL'USCITA MERCI, al costo
+standard dell'articolo — esattamente come il movimento 601 di SAP. La fattura
+poi registra solo Ricavi/IVA/Crediti. Il margine (Ricavo − COGS) è visibile
+nel report Margini.
+"""
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from decimal import Decimal
+
+from flask import Blueprint, render_template, redirect, url_for, request, flash
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, AccountMapping, CostCenter, JournalEntry, JournalLine, EconomicSubject
-from services.posting import post_journal_entry, reverse_journal_entry, UnbalancedEntryError, PeriodClosedError
-from services.co import validate_co_assignment, COValidationError
-from services.ai_posting import suggerisci_scrittura, estrai_testo_pdf, AISuggestionError
-from services.classificazione_operazioni import classifica, guida_per_classe, CLASSI_OPERAZIONE
-from services.rettifiche_operazioni import classifica_rettifica, guida_per_rettifica, CATALOGO_RETTIFICHE
-from services.payments import allocate_payment, PaymentAllocationError
-from services.bank_reconciliation import (import_statement_csv, auto_match, manual_match,
-                                          BankReconciliationError)
-from blueprints.decorators import commercialista_required
-from models import (AccountingPeriod, AccountingPeriodLog, FiscalParameter, InvoiceInstallment,
-                    PaymentAllocation, BankStatement, BankStatementLine, BankReconciliationAllocation)
-from datetime import date
-import calendar
+from models import (
+    Account, AccountMapping, CostCenter, EconomicSubject, Material, Quotation, QuotationLine,
+    SalesOrder, SalesOrderLine, Delivery, DeliveryLine, InvoiceLine,
+    JournalEntry, JournalLine, InvoiceInstallment, PaymentAllocation,
+)
+from services.posting import post_journal_entry, UnbalancedEntryError
+from services.reversals import reverse_delivery, ReversalError
+from services.logistic_client import get_stock, LogisticError
 
-gl_bp = Blueprint("gl", __name__, template_folder="../../templates/gl")
-
-# Etichette leggibili per i doc_type — usate sia nel filtro del Giornale sia
-# nel riepilogo per tipo documento (la "prova" che tutto quello che passa da
-# SD/MM/Paghe/Cespiti sia effettivamente arrivato in Prima Nota).
-DOC_TYPE_LABELS = {
-    "SA": "Prima Nota manuale",
-    "KR": "Fattura Fornitore (AP)",
-    "DR": "Fattura Cliente (AR)",
-    "KZ": "Pagamento",
-    "DZ": "Incasso",
-    "Cespiti": "Capitalizzazione Cespite",
-    "AF": "Ammortamento",
-    "QT": "Preventivo",
-    "OR": "Ordine Cliente",
-    "DL": "DDT / Uscita Merci",
-    "OA": "Ordine d'Acquisto",
-    "GR": "Entrata Merci",
-    "RFQ": "Richiesta d'Offerta",
-    "PG": "Paghe (accantonamento/F24/pagamento)",
-}
+sd_bp = Blueprint("sd", __name__, template_folder="../../templates/sd")
 
 
-@gl_bp.route("/")
+def _acc(code):
+    a = Account.query.filter_by(code=code).first()
+    if a is None:
+        raise ValueError(f"Conto {code} mancante nel Piano dei Conti — lancia il seed.")
+    return a
+
+
+def _parse_lines(form, materials):
+    """Legge le righe articolo (material_id_N, qty_N, price_N) dal form."""
+    rows, errors = [], []
+    mat_by_id = {m.id: m for m in materials}
+    for i in range(1, 21):
+        mid = form.get(f"material_id_{i}", type=int)
+        if not mid:
+            continue
+        qty = form.get(f"qty_{i}", type=float) or 0
+        price = form.get(f"price_{i}", type=float)
+        mat = mat_by_id.get(mid)
+        if mat is None:
+            errors.append(f"Riga {i}: articolo non valido.")
+            continue
+        if qty <= 0:
+            errors.append(f"Riga {i} ({mat.code}): quantità deve essere > 0.")
+            continue
+        if price is None:
+            price = float(mat.sales_price)
+        rows.append({"material": mat, "qty": Decimal(str(qty)), "price": Decimal(str(price))})
+    if not rows and not errors:
+        errors.append("Inserisci almeno una riga articolo.")
+    return rows, errors
+
+
+# ══════════════════════════════════════════════════════════════
+# PREVENTIVI (VA21)
+# ══════════════════════════════════════════════════════════════
+@sd_bp.route("/quotations", methods=["GET", "POST"])
 @login_required
-def journal_list():
-    """Il 'Giornale' — lista cronologica di TUTTI i documenti (equivalente del
-    vecchio 'Giornale Integrato' del simulatore, qui però è il vero libro
-    giornale con numerazione progressiva reale).
-
-    Filtrabile per tipo documento, modulo di provenienza, controparte e stato
-    — è il posto dove verificare che TUTTO quello che esce da SD (Fatturazione
-    DDT → doc_type DR), da MM (Verifica Fattura → doc_type KR) o da Paghe
-    (doc_type PG) sia effettivamente arrivato in Prima Nota, e cosa resta
-    ancora aperto/da pagare.
-    """
-    page = request.args.get("page", 1, type=int)
-    doc_type = request.args.get("doc_type") or None
-    source_module = request.args.get("source_module") or None
-    party_id = request.args.get("party_id", type=int)
-    status = request.args.get("status") or None  # aperto | pagato | stornato
-    date_from = request.args.get("date_from") or None
-    date_to = request.args.get("date_to") or None
-
-    query = JournalEntry.query
-    if doc_type:
-        query = query.filter(JournalEntry.doc_type == doc_type)
-    if source_module:
-        query = query.filter(JournalEntry.source_module == source_module)
-    if party_id:
-        query = query.filter(JournalEntry.economic_subject_id == party_id)
-    if status == "aperto":
-        query = query.filter(JournalEntry.is_paid.is_(False), JournalEntry.is_reversed.is_(False))
-    elif status == "pagato":
-        query = query.filter(JournalEntry.is_paid.is_(True))
-    elif status == "stornato":
-        query = query.filter(JournalEntry.is_reversed.is_(True))
-    if date_from:
-        try:
-            query = query.filter(JournalEntry.doc_date >= datetime.strptime(date_from, "%Y-%m-%d").date())
-        except ValueError:
-            pass
-    if date_to:
-        try:
-            query = query.filter(JournalEntry.doc_date <= datetime.strptime(date_to, "%Y-%m-%d").date())
-        except ValueError:
-            pass
-
-    entries = query.order_by(JournalEntry.created_at.desc()).paginate(page=page, per_page=25, error_out=False)
-
-    # Riepilogo per tipo documento — SEMPRE sul totale (non filtrato), è la
-    # "prova del nove": qui vedi in un colpo d'occhio quante DR/KR/PG/... sono
-    # arrivate in Prima Nota, da confrontare con quante fatture/DDT/buste
-    # risultano emesse/ricevute nei rispettivi moduli (SD/MM/Paghe).
-    counts_raw = (db.session.query(JournalEntry.doc_type, db.func.count(JournalEntry.id))
-                  .group_by(JournalEntry.doc_type).all())
-    doc_type_summary = sorted(
-        ({"doc_type": t, "label": DOC_TYPE_LABELS.get(t, t), "count": c} for t, c in counts_raw),
-        key=lambda r: -r["count"])
-
-    all_doc_types = [t for t, in db.session.query(JournalEntry.doc_type).distinct().order_by(JournalEntry.doc_type)]
-    all_modules = [m for m, in db.session.query(JournalEntry.source_module).distinct().order_by(JournalEntry.source_module)]
-    parties = EconomicSubject.query.order_by(EconomicSubject.name).all()
-
-    return render_template("gl/journal_list.html", entries=entries, doc_type_summary=doc_type_summary,
-                           doc_type_labels=DOC_TYPE_LABELS, all_doc_types=all_doc_types,
-                           all_modules=all_modules, parties=parties,
-                           filters={"doc_type": doc_type, "source_module": source_module,
-                                    "party_id": party_id, "status": status,
-                                    "date_from": date_from, "date_to": date_to},
-                           pager_args={k: v for k, v in {
-                               "doc_type": doc_type, "source_module": source_module,
-                               "party_id": party_id, "status": status,
-                               "date_from": date_from, "date_to": date_to}.items() if v})
-
-
-@gl_bp.route("/piano-conti")
-@login_required
-def piano_conti():
-    """Piano dei Conti — elenco completo (attivi e non) per verificare a colpo
-    d'occhio cosa esiste davvero nel database, senza doverlo dedurre dal
-    menu a tendina della Prima Nota."""
-    accounts = Account.query.order_by(Account.account_type, Account.code).all()
-    gruppi = {}
-    for a in accounts:
-        gruppi.setdefault(a.account_type, []).append(a)
-    ordine_tipi = ["patrimoniale_attivo", "patrimoniale_passivo", "costo", "ricavo"]
-    etichette_tipo = {"patrimoniale_attivo": "Stato Patrimoniale — Attivo",
-                       "patrimoniale_passivo": "Stato Patrimoniale — Passivo",
-                       "costo": "Conto Economico — Costi", "ricavo": "Conto Economico — Ricavi"}
-    return render_template("gl/piano_conti.html", gruppi=gruppi, ordine_tipi=ordine_tipi,
-                           etichette_tipo=etichette_tipo, totale=len(accounts))
-
-
-@gl_bp.route("/periods", methods=["GET"])
-@login_required
-@commercialista_required
-def periods():
-    """Elenco periodi contabili — Fase 2, punto 5 della progettazione."""
-    all_periods = AccountingPeriod.query.order_by(AccountingPeriod.year.desc(), AccountingPeriod.month.desc()).all()
-    enforced = FiscalParameter.query.filter_by(key="period_lock_enforced").first()
-    lock_active = bool(enforced and str(enforced.value).lower() == "true")
-    return render_template("gl/periods.html", periods=all_periods, lock_active=lock_active)
-
-
-@gl_bp.route("/periods/create", methods=["POST"])
-@login_required
-@commercialista_required
-def periods_create():
-    year = request.form.get("year", type=int)
-    month = request.form.get("month", type=int)
-    if not year or not month or not (1 <= month <= 12):
-        flash("Anno e mese sono obbligatori (mese 1-12).", "danger")
-        return redirect(url_for("gl.periods"))
-    if AccountingPeriod.query.filter_by(company="Iron Appalti", year=year, month=month).first():
-        flash(f"Il periodo {month:02d}/{year} esiste già — nessuna sovrapposizione permessa.", "danger")
-        return redirect(url_for("gl.periods"))
-    last_day = calendar.monthrange(year, month)[1]
-    period = AccountingPeriod(
-        company="Iron Appalti", year=year, month=month,
-        start_date=date(year, month, 1), end_date=date(year, month, last_day),
-        period_type="mensile", status="aperto",
-    )
-    db.session.add(period)
-    db.session.commit()
-    flash(f"Periodo {month:02d}/{year} creato (aperto).", "success")
-    return redirect(url_for("gl.periods"))
-
-
-@gl_bp.route("/periods/<int:period_id>/close", methods=["POST"])
-@login_required
-@commercialista_required
-def periods_close(period_id):
-    period = AccountingPeriod.query.get_or_404(period_id)
-    if not period.is_open:
-        flash("Il periodo è già chiuso.", "danger")
-        return redirect(url_for("gl.periods"))
-    period.status = "chiuso"
-    period.closed_by_id = current_user.id
-    period.closed_at = datetime.utcnow()
-    db.session.add(AccountingPeriodLog(period_id=period.id, action="chiusura",
-                                       performed_by_id=current_user.id,
-                                       reason=request.form.get("reason") or None))
-    db.session.commit()
-    flash(f"Periodo {period.month:02d}/{period.year} chiuso.", "success")
-    return redirect(url_for("gl.periods"))
-
-
-@gl_bp.route("/periods/<int:period_id>/reopen", methods=["POST"])
-@login_required
-@commercialista_required
-def periods_reopen(period_id):
-    period = AccountingPeriod.query.get_or_404(period_id)
-    reason = (request.form.get("reason") or "").strip()
-    if not reason:
-        flash("La riapertura di un periodo chiuso richiede un motivo scritto.", "danger")
-        return redirect(url_for("gl.periods"))
-    if period.is_open:
-        flash("Il periodo è già aperto.", "danger")
-        return redirect(url_for("gl.periods"))
-    period.status = "riaperto_temporaneamente"
-    period.reopen_reason = reason
-    db.session.add(AccountingPeriodLog(period_id=period.id, action="riapertura",
-                                       performed_by_id=current_user.id, reason=reason))
-    db.session.commit()
-    flash(f"Periodo {period.month:02d}/{period.year} riaperto temporaneamente. Motivo registrato nel log.", "success")
-    return redirect(url_for("gl.periods"))
-
-
-@gl_bp.route("/periods/lock-toggle", methods=["POST"])
-@login_required
-@commercialista_required
-def periods_lock_toggle():
-    """Attiva/disattiva il blocco su periodi ASSENTI (non ancora creati).
-    Va attivato non appena i periodi correnti sono stati creati — lasciarlo
-    disattivo indefinitamente vanifica lo scopo della chiusura periodi."""
-    enforced = FiscalParameter.query.filter_by(key="period_lock_enforced").first()
-    new_value = "false" if (enforced and enforced.value.lower() == "true") else "true"
-    if enforced:
-        enforced.value = new_value
-        enforced.updated_by_id = current_user.id
-    else:
-        db.session.add(FiscalParameter(key="period_lock_enforced", value=new_value,
-                                       description="Se 'true', blocca le registrazioni su date senza un periodo contabile creato.",
-                                       category="periodi", updated_by_id=current_user.id))
-    db.session.commit()
-    flash(f"Blocco su periodi assenti ora {'ATTIVO' if new_value == 'true' else 'disattivo'}.", "success")
-    return redirect(url_for("gl.periods"))
-
-
-@gl_bp.route("/riconciliazione-bancaria", methods=["GET"])
-@login_required
-def bank_reconciliation():
-    """Fase 4 (progettazione parti mancanti, punto 6) — vista principale."""
-    statements = BankStatement.query.order_by(BankStatement.period_from.desc()).all()
-    bank_accounts = Account.query.filter(Account.account_type == "patrimoniale_attivo",
-                                         Account.active.is_(True)).order_by(Account.code).all()
-    statement_id = request.args.get("statement_id", type=int)
-    lines = []
-    unmatched_gl_lines = []
-    if statement_id:
-        statement = BankStatement.query.get(statement_id)
-        lines = BankStatementLine.query.filter_by(statement_id=statement_id).order_by(BankStatementLine.value_date).all()
-        if statement:
-            candidates = (JournalLine.query.join(JournalEntry)
-                         .filter(JournalLine.account_id == statement.bank_account_id,
-                                 JournalEntry.is_reversed.is_(False))
-                         .order_by(JournalEntry.doc_date.desc()).limit(200).all())
-            for jl in candidates:
-                jl_amount = abs(Decimal(str(jl.dare)) - Decimal(str(jl.avere)))
-                allocated = sum((a.amount_allocated for a in jl.bank_allocations if not a.reversed), Decimal("0"))
-                if jl_amount - allocated > 0:
-                    unmatched_gl_lines.append(jl)
-    return render_template("gl/bank_reconciliation.html", statements=statements, bank_accounts=bank_accounts,
-                           lines=lines, statement_id=statement_id, unmatched_gl_lines=unmatched_gl_lines)
-
-
-@gl_bp.route("/riconciliazione-bancaria/importa", methods=["POST"])
-@login_required
-def bank_reconciliation_import():
-    bank_account_id = request.form.get("bank_account_id", type=int)
-    bank_account = Account.query.get(bank_account_id) if bank_account_id else None
-    file = request.files.get("csv_file")
-    if bank_account is None or not file or not file.filename:
-        flash("Seleziona il conto banca e un file CSV.", "danger")
-        return redirect(url_for("gl.bank_reconciliation"))
-    try:
-        statement, n = import_statement_csv(bank_account, file.read(), file.filename, imported_by_id=current_user.id)
-        n_matched = auto_match(statement.id, created_by_id=current_user.id)
-        flash(f"Estratto conto importato: {n} righe, {n_matched} abbinate automaticamente.", "success")
-        return redirect(url_for("gl.bank_reconciliation", statement_id=statement.id))
-    except BankReconciliationError as e:
-        db.session.rollback()
-        flash(str(e), "danger")
-        return redirect(url_for("gl.bank_reconciliation"))
-
-
-@gl_bp.route("/riconciliazione-bancaria/abbina", methods=["POST"])
-@login_required
-def bank_reconciliation_match():
-    statement_line_id = request.form.get("statement_line_id", type=int)
-    journal_line_id = request.form.get("journal_line_id", type=int)
-    amount = request.form.get("amount")
-    statement_id = request.form.get("statement_id", type=int)
-    try:
-        manual_match(statement_line_id, journal_line_id, amount, created_by_id=current_user.id)
-        flash("Abbinamento registrato.", "success")
-    except (BankReconciliationError, ValueError) as e:
-        flash(str(e), "danger")
-    return redirect(url_for("gl.bank_reconciliation", statement_id=statement_id))
-
-
-@gl_bp.route("/account-mapping", methods=["GET", "POST"])
-@login_required
-@commercialista_required
-def account_mapping():
-    """Piano dei conti canonico — configurazione dei concetti contabili usati
-    da AP/AR/GL/Cespiti (banca, IVA a credito/debito, crediti clienti, debiti
-    fornitori, cespiti, ammortamenti, ritenute...). Solo ruolo commercialista.
-
-    Progettazione parti mancanti, punto 0: prima di questa pagina i codici
-    erano scritti a mano in ogni blueprint (_get_account_by_code("180000")
-    sparso in AP/AR/GL/Cespiti). Ora si cambiano da un solo posto.
-    """
-    mappings = AccountMapping.query.order_by(AccountMapping.category, AccountMapping.label).all()
-    accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
-
-    # Natura attesa per concetto — stesso controllo già applicato in payroll/config.html,
-    # per evitare che un errore di distrazione punti "IVA a Debito" su un conto di costo.
-    EXPECTED_NATURE = {
-        "banca_principale": "patrimoniale_attivo", "iva_credito": "patrimoniale_attivo",
-        "iva_debito": "patrimoniale_passivo", "crediti_clienti": "patrimoniale_attivo",
-        "debiti_fornitori": "patrimoniale_passivo", "cespiti_impianti": "patrimoniale_attivo",
-        "ammortamenti_costo": "costo", "fondo_ammortamento": "patrimoniale_passivo",
-        "ritenute_professionisti": "patrimoniale_passivo",
-        "abbuoni_attivi": "costo", "abbuoni_passivi": "ricavo",
-    }
+def quotations():
+    customers = EconomicSubject.query.filter_by(active=True, is_customer=True).order_by(EconomicSubject.name).all()
+    materials = Material.query.filter_by(active=True).order_by(Material.code).all()
 
     if request.method == "POST":
-        for m in mappings:
-            new_account_id = request.form.get(f"account_{m.id}", type=int)
-            if new_account_id and new_account_id != m.account_id:
-                new_account = Account.query.get(new_account_id)
-                if not new_account or not new_account.active:
-                    flash(f"Conto selezionato non valido/attivo per '{m.label}'.", "danger")
-                    return render_template("gl/account_mapping.html", mappings=mappings, accounts=accounts)
-                expected = EXPECTED_NATURE.get(m.concept_key)
-                if expected and new_account.account_type != expected:
-                    flash(f"Il conto {new_account.code} non ha natura coerente per '{m.label}' (attesa: {expected}).", "danger")
-                    return render_template("gl/account_mapping.html", mappings=mappings, accounts=accounts)
-                m.account_id = new_account.id
-                m.updated_by_id = current_user.id
-        db.session.commit()
-        flash("Piano dei conti canonico aggiornato. Le nuove registrazioni useranno i conti selezionati; quelle già registrate NON vengono modificate.", "success")
-        return redirect(url_for("gl.account_mapping"))
-
-    return render_template("gl/account_mapping.html", mappings=mappings, accounts=accounts)
-
-
-@gl_bp.route("/scadenzario")
-@login_required
-def scadenzario():
-    """Fase 3 — elenco rate aperte/scadute, cliente e fornitore insieme.
-    Sola lettura: il pagamento vero avviene in /gl/scadenzario/paga."""
-    subject_id = request.args.get("subject_id", type=int)
-    only_overdue = request.args.get("only_overdue") == "1"
-
-    query = (InvoiceInstallment.query
-             .join(JournalEntry, InvoiceInstallment.entry_id == JournalEntry.id)
-             .filter(InvoiceInstallment.residual_amount > 0, JournalEntry.is_reversed.is_(False)))
-    if subject_id:
-        query = query.filter(JournalEntry.economic_subject_id == subject_id)
-    installments = query.order_by(InvoiceInstallment.due_date.asc()).all()
-    if only_overdue:
-        installments = [i for i in installments if i.is_overdue]
-
-    subjects = EconomicSubject.query.filter_by(active=True).order_by(EconomicSubject.name).all()
-    return render_template("gl/scadenzario.html", installments=installments, subjects=subjects,
-                           subject_id=subject_id, only_overdue=only_overdue)
-
-
-@gl_bp.route("/scadenzario/paga", methods=["GET", "POST"])
-@login_required
-def scadenzario_paga():
-    """Pagamento/incasso PARZIALE su una o più rate dello stesso soggetto —
-    Fase 3, alternativa granulare a supplier_payment/customer_payment
-    (che restano per la compensazione a saldo pieno, invariate)."""
-    if request.method == "GET":
-        ids = request.args.getlist("installment_id", type=int)
-        installments = InvoiceInstallment.query.filter(InvoiceInstallment.id.in_(ids)).all() if ids else []
-        return render_template("gl/scadenzario_paga.html", installments=installments)
-
-    raw_ids = request.form.getlist("installment_id[]", type=int)
-    installments = InvoiceInstallment.query.filter(InvoiceInstallment.id.in_(raw_ids)).all()
-    if not installments:
-        flash("Nessuna rata selezionata.", "warning")
-        return redirect(url_for("gl.scadenzario"))
-
-    subject_ids = {i.entry.economic_subject_id for i in installments}
-    doc_types = {i.entry.doc_type for i in installments}
-    if len(subject_ids) != 1 or None in subject_ids:
-        flash("Seleziona rate di un unico soggetto economico.", "danger")
-        return redirect(url_for("gl.scadenzario"))
-    if len(doc_types) != 1 or not doc_types.issubset({"KR", "DR"}):
-        flash("Non è possibile mescolare rate fornitore e rate cliente nello stesso pagamento.", "danger")
-        return redirect(url_for("gl.scadenzario"))
-    is_supplier_side = doc_types == {"KR"}
-
-    try:
-        allocations = []
-        total_cash = Decimal("0")
-        total_abbuono = Decimal("0")
-        for inst in installments:
-            cash = Decimal(request.form.get(f"cash_{inst.id}", "0") or "0")
-            abbuono = Decimal(request.form.get(f"abbuono_{inst.id}", "0") or "0")
-            if cash == 0 and abbuono == 0:
-                continue
-            allocations.append({"installment_id": inst.id, "cash_amount": cash, "abbuono_amount": abbuono})
-            total_cash += cash
-            total_abbuono += abbuono
-        if not allocations:
-            flash("Nessun importo inserito.", "warning")
-            return redirect(url_for("gl.scadenzario"))
-        if total_cash <= 0:
-            flash("Il pagamento deve movimentare un importo in contanti positivo (l'abbuono da solo non basta).", "danger")
-            return redirect(url_for("gl.scadenzario"))
-
-        economic_subject_id = next(iter(subject_ids))
-        refs = [i.entry.doc_number for i in installments]
-        # L'importo che chiude la partita fornitore/cliente è cash + abbuono
-        # (l'intero debito/credito estinto); la banca movimenta SOLO il cash;
-        # l'abbuono, se presente, va sul conto autorizzato — così la
-        # scrittura è GIÀ bilanciata al momento della creazione, non dopo.
-        total_extinto = total_cash + total_abbuono
-        if is_supplier_side:
-            ap_account = AccountMapping.get_or_error("debiti_fornitori")
-            bank_account = AccountMapping.get_or_error("banca_principale")
-            lines = [
-                {"account_id": ap_account.id, "dare": total_extinto, "avere": 0},
-                {"account_id": bank_account.id, "dare": 0, "avere": total_cash},
-            ]
-            if total_abbuono > 0:
-                abbuono_account = AccountMapping.get_or_error("abbuoni_passivi")
-                lines.append({"account_id": abbuono_account.id, "dare": 0, "avere": total_abbuono})
-            payment_entry = post_journal_entry(
-                doc_type="KZ", prefix="15", doc_date=None,
-                description=f"Pagamento parziale fornitore — rate {', '.join(refs)}",
-                lines=lines, source_module="LEDGER", reference=", ".join(refs),
-                created_by_id=current_user.id, economic_subject_id=economic_subject_id,
-                gross_amount=total_cash, commit=False,
-            )
+        customer_id = request.form.get("customer_id", type=int)
+        if not customer_id:
+            flash("Seleziona il cliente.", "danger")
         else:
-            ar_account = AccountMapping.get_or_error("crediti_clienti")
-            bank_account = AccountMapping.get_or_error("banca_principale")
-            lines = [
-                {"account_id": bank_account.id, "dare": total_cash, "avere": 0},
-                {"account_id": ar_account.id, "dare": 0, "avere": total_extinto},
-            ]
-            if total_abbuono > 0:
-                abbuono_account = AccountMapping.get_or_error("abbuoni_attivi")
-                lines.append({"account_id": abbuono_account.id, "dare": total_abbuono, "avere": 0})
-            payment_entry = post_journal_entry(
-                doc_type="DZ", prefix="14", doc_date=None,
-                description=f"Incasso parziale cliente — rate {', '.join(refs)}",
-                lines=lines, source_module="LEDGER", reference=", ".join(refs),
-                created_by_id=current_user.id, economic_subject_id=economic_subject_id,
-                gross_amount=total_cash, commit=False,
-            )
+            rows, errors = _parse_lines(request.form, materials)
+            for e in errors:
+                flash(e, "danger")
+            if rows and not errors:
+                from models import DocumentSequence
+                q = Quotation(
+                    doc_number=DocumentSequence.next_number("QT", "30"),
+                    doc_date=datetime.strptime(request.form.get("doc_date"), "%Y-%m-%d").date()
+                    if request.form.get("doc_date") else datetime.utcnow().date(),
+                    economic_subject_id=customer_id,
+                    note=request.form.get("note", "").strip(),
+                    created_by_id=current_user.id,
+                )
+                db.session.add(q)
+                db.session.flush()
+                for r in rows:
+                    db.session.add(QuotationLine(quotation_id=q.id, material_id=r["material"].id,
+                                                 qty=r["qty"], price=r["price"]))
+                db.session.commit()
+                flash(f"Preventivo {q.doc_number} creato — totale {q.total_net:.2f} € netto.", "success")
+                return redirect(url_for("sd.quotations"))
 
-        cash_alloc, abbuono_alloc, unallocated = allocate_payment(
-            payment_entry, allocations, created_by_id=current_user.id
+    quots = Quotation.query.order_by(Quotation.id.desc()).all()
+    return render_template("sd/quotations.html", quotations=quots,
+                           customers=customers, materials=materials)
+
+
+@sd_bp.route("/quotations/<int:quot_id>/conferma")
+@login_required
+def quotation_confirmation(quot_id):
+    """Conferma di Preventivo — documento formale da mandare al cliente,
+    stampabile/salvabile in PDF. Stesso principio già usato per la Conferma
+    d'Ordine: non è un nuovo modello dati, rilegge il Preventivo esistente."""
+    q = Quotation.query.get_or_404(quot_id)
+    return render_template("sd/quotation_confirmation.html", q=q)
+
+
+def _elimina_pagamenti_orfani(entry_ids_da_eliminare):
+    """Helper condiviso da tutte le cancellazioni SD sotto: dato un elenco
+    di JournalEntry che stanno per essere eliminati, rimuove le
+    allocazioni di pagamento verso le loro rate e — SOLO se un incasso
+    resta senza più nessun legame verso fatture NON coinvolte in questa
+    cancellazione — elimina anche quell'incasso. Se l'incasso pagava
+    ANCHE una fattura non toccata da questa cancellazione, resta intatto."""
+    installment_ids = [i.id for i in InvoiceInstallment.query.filter(
+        InvoiceInstallment.entry_id.in_(entry_ids_da_eliminare)).all()]
+    payment_entry_ids = set()
+    if installment_ids:
+        for pa in PaymentAllocation.query.filter(PaymentAllocation.installment_id.in_(installment_ids)).all():
+            payment_entry_ids.add(pa.payment_entry_id)
+            db.session.delete(pa)
+    for e in JournalEntry.query.filter(JournalEntry.id.in_(entry_ids_da_eliminare)).all():
+        if e.paid_by_entry_id:
+            payment_entry_ids.add(e.paid_by_entry_id)
+    db.session.flush()
+
+    for peid in payment_entry_ids:
+        ancora_usato = PaymentAllocation.query.filter_by(payment_entry_id=peid).first() is not None
+        ancora_paga_altro = JournalEntry.query.filter(
+            JournalEntry.paid_by_entry_id == peid,
+            ~JournalEntry.id.in_(entry_ids_da_eliminare)
+        ).first() is not None
+        if not ancora_usato and not ancora_paga_altro:
+            # Scollega PRIMA i riferimenti dalle fatture che stiamo per
+            # eliminare (anche loro puntano a peid via paid_by_entry_id) —
+            # senza questo, Postgres rifiuta la cancellazione per il
+            # vincolo di chiave esterna, esattamente come già successo
+            # sul cogs_entry_id di Delivery.
+            JournalEntry.query.filter(
+                JournalEntry.id.in_(entry_ids_da_eliminare),
+                JournalEntry.paid_by_entry_id == peid
+            ).update({"paid_by_entry_id": None}, synchronize_session=False)
+            db.session.flush()
+            JournalLine.query.filter_by(entry_id=peid).delete(synchronize_session=False)
+            JournalEntry.query.filter_by(id=peid).delete(synchronize_session=False)
+
+
+def _elimina_scrittura_sd(entry_id):
+    """Elimina una scrittura SD (Fattura da DDT o Costo del Venduto) e
+    tutto ciò che ne dipende, gestendo con cautela eventuali pagamenti.
+    Blocca se la scrittura è coinvolta in uno storno (originale o storno
+    stesso): eliminarla lascerebbe un riferimento rotto sull'altro lato,
+    stesso tipo di violazione già vista sul collegamento DDT→COGS."""
+    entry = JournalEntry.query.get(entry_id)
+    if entry is None:
+        return
+    if entry.is_reversed or entry.reversed_by_id or entry.reverses_id:
+        raise ValueError(
+            f"Il documento {entry.doc_number} è collegato a uno storno — non eliminabile da qui."
         )
-        db.session.commit()
-        flash(f"Pagamento parziale registrato: Doc. {payment_entry.doc_number} — "
-              f"contanti {cash_alloc:.2f} €, abbuoni {abbuono_alloc:.2f} €.", "success")
-        return redirect(url_for("gl.entry_detail", entry_id=payment_entry.id))
-    except (UnbalancedEntryError, PeriodClosedError, PaymentAllocationError, ValueError) as e:
+    _elimina_pagamenti_orfani([entry_id])
+    InvoiceInstallment.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    InvoiceLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    JournalLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    JournalEntry.query.filter_by(id=entry_id).delete(synchronize_session=False)
+
+
+@sd_bp.route("/fatture/<int:entry_id>/elimina", methods=["POST"])
+@login_required
+def fattura_elimina(entry_id):
+    """Elimina una fattura generata da DDT (Fatturazione DDT) — solo se
+    generata dal ciclo SD (source_module='VENDITE'). Per dati di prova,
+    non per correggere fatture reali già emesse: quelle si stornano."""
+    entry = JournalEntry.query.get_or_404(entry_id)
+    if entry.source_module != "VENDITE" or entry.doc_type not in ("DR", "DG"):
+        flash("Questa fattura non è stata generata dal ciclo SD — non eliminabile da qui.", "danger")
+        return redirect(url_for("sd.billing"))
+    doc_number = entry.doc_number
+    delivery = Delivery.query.filter_by(billing_entry_id=entry.id).first()
+    if delivery:
+        delivery.billing_entry_id = None
+        db.session.flush()  # scollega davvero prima del delete, non fidarsi dell'autoflush implicito
+    try:
+        _elimina_scrittura_sd(entry.id)
+    except ValueError as e:
         db.session.rollback()
         flash(str(e), "danger")
-        return redirect(url_for("gl.scadenzario"))
+        return redirect(url_for("sd.billing"))
+    db.session.commit()
+    flash(f"Fattura {doc_number} eliminata. Il DDT collegato torna disponibile per una nuova fatturazione.", "success")
+    return redirect(url_for("sd.billing"))
 
 
-@gl_bp.route("/giornale/ispezione-ai", methods=["POST"])
+@sd_bp.route("/deliveries/<int:delivery_id>/elimina", methods=["POST"])
 @login_required
-def journal_ai_inspection():
-    """Ispezione AI del Libro Giornale dal 1° gennaio dell'anno corrente a
-    oggi — controllo di PATTERN (conti insoliti, centro di costo mancante,
-    possibili doppioni, descrizioni generiche), non un giudizio fiscale.
-    Ogni click è una scelta esplicita dell'utente: manda dati contabili
-    reali a OpenAI, non succede mai in automatico."""
-    from datetime import date
-    from services.ai_audit import ispeziona_giornale, AuditError
-
-    inizio_anno = date(date.today().year, 1, 1)
-    entries = (JournalEntry.query
-              .filter(JournalEntry.doc_date >= inizio_anno, JournalEntry.doc_date <= date.today())
-              .order_by(JournalEntry.doc_date.asc()).all())
-    try:
-        anomalie, riepilogo = ispeziona_giornale(entries)
-        return render_template("gl/ai_inspection_result.html", anomalie=anomalie, riepilogo=riepilogo,
-                               n_scritture=len(entries), inizio=inizio_anno, fine=date.today())
-    except AuditError as e:
-        flash(str(e), "danger")
-        return redirect(url_for("gl.journal_list"))
-
-
-@gl_bp.route("/centri-di-costo")
-@login_required
-def cost_centers_list():
-    """Elenco centri di costo/ricavo — punto di accesso a ciascun mastrino
-    per centro (verifica che le registrazioni li movimentino davvero)."""
-    centers = CostCenter.query.order_by(CostCenter.code).all()
-    totali = {}
-    for c in centers:
-        righe = JournalLine.query.join(JournalEntry).filter(
-            JournalLine.cost_center_id == c.id, JournalEntry.is_reversed.is_(False)
-        ).all()
-        totali[c.id] = {
-            "n_movimenti": len(righe),
-            "totale_costi": sum((float(r.dare) for r in righe if r.account.account_type == "costo"), 0.0),
-            "totale_ricavi": sum((float(r.avere) for r in righe if r.account.account_type == "ricavo"), 0.0),
-        }
-    return render_template("gl/cost_centers_list.html", centers=centers, totali=totali)
-
-
-@gl_bp.route("/centro/<int:center_id>")
-@login_required
-def cost_center_ledger(center_id):
-    """Mastrino per Centro di Costo/Ricavo — tutti i movimenti (di qualunque
-    modulo) che hanno questo centro assegnato, in ordine cronologico. Stesso
-    principio del Mastrino conto: qui verifichi che le registrazioni
-    agiscano DAVVERO sui centri, non solo che il campo esista nel form."""
-    center = CostCenter.query.get_or_404(center_id)
-    date_from = request.args.get("date_from") or None
-    date_to = request.args.get("date_to") or None
-
-    query = (JournalLine.query.join(JournalEntry)
-            .filter(JournalLine.cost_center_id == center_id, JournalEntry.is_reversed.is_(False)))
-    if date_from:
+def delivery_elimina(delivery_id):
+    """Elimina un DDT — blocca se è già stato fatturato: elimina prima la fattura."""
+    d = Delivery.query.get_or_404(delivery_id)
+    if d.billing_entry_id is not None:
+        flash(f"Il DDT {d.doc_number} è già fatturato — elimina prima la fattura collegata.", "danger")
+        return redirect(url_for("sd.deliveries"))
+    doc_number = d.doc_number
+    cogs_entry_id = d.cogs_entry_id
+    d.cogs_entry_id = None  # scollega PRIMA di eliminare la scrittura — Postgres
+    db.session.flush()      # applica subito l'UPDATE, altrimenti il vincolo di
+                             # chiave esterna blocca la cancellazione della scrittura
+    if cogs_entry_id:
         try:
-            query = query.filter(JournalEntry.doc_date >= datetime.strptime(date_from, "%Y-%m-%d").date())
-        except ValueError:
-            pass
-    if date_to:
-        try:
-            query = query.filter(JournalEntry.doc_date <= datetime.strptime(date_to, "%Y-%m-%d").date())
-        except ValueError:
-            pass
-    righe = query.order_by(JournalEntry.doc_date.asc(), JournalEntry.id.asc()).all()
-
-    totale_costi = sum((float(r.dare) for r in righe if r.account.account_type == "costo"), 0.0)
-    totale_ricavi = sum((float(r.avere) for r in righe if r.account.account_type == "ricavo"), 0.0)
-
-    return render_template("gl/cost_center_ledger.html", center=center, righe=righe,
-                           totale_costi=totale_costi, totale_ricavi=totale_ricavi,
-                           margine=totale_ricavi - totale_costi,
-                           filters={"date_from": date_from, "date_to": date_to})
+            _elimina_scrittura_sd(cogs_entry_id)
+        except ValueError as e:
+            db.session.rollback()
+            flash(str(e), "danger")
+            return redirect(url_for("sd.deliveries"))
+    for dl_line in d.lines:
+        so_line = SalesOrderLine.query.filter_by(order_id=d.order_id, material_id=dl_line.material_id).first()
+        if so_line is not None:
+            so_line.qty_delivered = max(Decimal("0"), Decimal(str(so_line.qty_delivered or 0)) - Decimal(str(dl_line.qty)))
+    # Le righe (DeliveryLine) sono già eliminate in automatico dal cascade
+    # della relationship — qui basta il delete dell'aggregato.
+    db.session.delete(d)
+    db.session.commit()
+    flash(f"DDT {doc_number} eliminato. Le quantità sull'ordine sono state ripristinate.", "success")
+    return redirect(url_for("sd.deliveries"))
 
 
-@gl_bp.route("/mastrino/<int:account_id>")
+@sd_bp.route("/orders/<int:order_id>/elimina", methods=["POST"])
 @login_required
-def mastrino_conto(account_id):
-    """Mastrino con importi Decimal e saldo progressivo comprensivo dell'apertura."""
-    account = Account.query.get_or_404(account_id)
-    date_from = request.args.get("date_from") or None
-    date_to = request.args.get("date_to") or None
-    parsed_from = parsed_to = None
-    try:
-        parsed_from = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else None
-        parsed_to = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else None
-        if parsed_from and parsed_to and parsed_from > parsed_to:
-            raise ValueError
-    except ValueError:
-        flash("Intervallo date non valido.", "warning")
-        parsed_from = parsed_to = None
-        date_from = date_to = None
+def order_elimina(order_id):
+    """Elimina un ordine cliente — blocca se ha già DDT collegati: elimina prima quelli."""
+    o = SalesOrder.query.get_or_404(order_id)
+    if Delivery.query.filter_by(order_id=o.id).first():
+        flash(f"L'ordine {o.doc_number} ha già DDT collegati — eliminali prima.", "danger")
+        return redirect(url_for("sd.orders"))
+    doc_number = o.doc_number
+    if o.quotation_id:
+        q = Quotation.query.get(o.quotation_id)
+        if q and q.status == "convertito":
+            q.status = "aperto"  # il preventivo torna convertibile
+    # Le righe (SalesOrderLine) sono già eliminate in automatico dal cascade.
+    db.session.delete(o)
+    db.session.commit()
+    flash(f"Ordine {doc_number} eliminato.", "success")
+    return redirect(url_for("sd.orders"))
 
-    base_query = (JournalLine.query.join(JournalEntry)
-                  .filter(JournalLine.account_id == account_id))
-    saldo_iniziale = Decimal("0")
-    if parsed_from:
-        prior = base_query.filter(JournalEntry.doc_date < parsed_from).all()
-        saldo_iniziale = sum(
-            (Decimal(str(r.dare or 0)) - Decimal(str(r.avere or 0)) for r in prior), Decimal("0")
-        )
-    query = base_query
-    if parsed_from:
-        query = query.filter(JournalEntry.doc_date >= parsed_from)
-    if parsed_to:
-        query = query.filter(JournalEntry.doc_date <= parsed_to)
-    righe = query.order_by(JournalEntry.doc_date.asc(), JournalEntry.id.asc(), JournalLine.id.asc()).all()
 
-    movimenti = []
-    saldo = saldo_iniziale
-    for r in righe:
-        dare = Decimal(str(r.dare or 0))
-        avere = Decimal(str(r.avere or 0))
-        saldo += dare - avere
-        movimenti.append({"entry": r.entry, "dare": dare, "avere": avere,
-                          "saldo_progressivo": saldo, "cost_center": r.cost_center})
-    totale_dare = sum((m["dare"] for m in movimenti), Decimal("0"))
-    totale_avere = sum((m["avere"] for m in movimenti), Decimal("0"))
-    return render_template(
-        "gl/mastrino_conto.html", account=account, movimenti=movimenti,
-        totale_dare=totale_dare, totale_avere=totale_avere, saldo_iniziale=saldo_iniziale,
-        saldo_finale=saldo, filters={"date_from": date_from, "date_to": date_to}
+@sd_bp.route("/quotations/<int:quot_id>/elimina", methods=["POST"])
+@login_required
+def quotation_elimina(quot_id):
+    """Elimina un preventivo — blocca se già convertito in ordine: elimina prima l'ordine."""
+    q = Quotation.query.get_or_404(quot_id)
+    if SalesOrder.query.filter_by(quotation_id=q.id).first():
+        flash(f"Il preventivo {q.doc_number} è già stato convertito in ordine — elimina prima l'ordine.", "danger")
+        return redirect(url_for("sd.quotations"))
+    doc_number = q.doc_number
+    # Le righe (QuotationLine) sono già eliminate in automatico dal cascade.
+    db.session.delete(q)
+    db.session.commit()
+    flash(f"Preventivo {doc_number} eliminato.", "success")
+    return redirect(url_for("sd.quotations"))
+
+
+@sd_bp.route("/quotations/<int:quot_id>/convert", methods=["POST"])
+@login_required
+def quotation_convert(quot_id):
+    """Copy control: Preventivo → Ordine cliente (tutte le righe)."""
+    q = Quotation.query.get_or_404(quot_id)
+    if q.status == "convertito":
+        flash(f"Il preventivo {q.doc_number} è già stato convertito.", "warning")
+        return redirect(url_for("sd.quotations"))
+
+    from models import DocumentSequence
+    o = SalesOrder(
+        doc_number=DocumentSequence.next_number("OR", "31"),
+        economic_subject_id=q.economic_subject_id, quotation_id=q.id,
+        note=f"Da preventivo {q.doc_number}",
+        created_by_id=current_user.id,
     )
+    db.session.add(o)
+    db.session.flush()
+    for l in q.lines:
+        db.session.add(SalesOrderLine(order_id=o.id, material_id=l.material_id,
+                                      qty=l.qty, price=l.price))
+    q.status = "convertito"
+    db.session.commit()
+    flash(f"Ordine {o.doc_number} creato da preventivo {q.doc_number}.", "success")
+    return redirect(url_for("sd.orders"))
 
 
-@gl_bp.route("/partitario/<int:economic_subject_id>")
+# ══════════════════════════════════════════════════════════════
+# ORDINI CLIENTE (VA01)
+# ══════════════════════════════════════════════════════════════
+@sd_bp.route("/orders", methods=["GET", "POST"])
 @login_required
-def partitario(economic_subject_id):
-    """Partitario individuale cliente/fornitore — tutti i documenti (fatture,
-    pagamenti/incassi, note credito) legati a questo soggetto economico, con
-    stato aperto/pagato/stornato e saldo residuo. Fino ad oggi l'unico modo
-    di vedere la posizione di un cliente/fornitore era filtrare il Giornale
-    per controparte: qui invece si vede la partita, non solo l'elenco.
-    """
-    party = EconomicSubject.query.get_or_404(economic_subject_id)
+def orders():
+    customers = EconomicSubject.query.filter_by(active=True, is_customer=True).order_by(EconomicSubject.name).all()
+    materials = Material.query.filter_by(active=True).order_by(Material.code).all()
 
-    entries = (JournalEntry.query
-               .filter(JournalEntry.economic_subject_id == economic_subject_id)
-               .order_by(JournalEntry.doc_date.asc(), JournalEntry.id.asc())
-               .all())
-
-    documenti = []
-    saldo_aperto = Decimal("0")
-    for e in entries:
-        importo = (Decimal(str(e.gross_amount)) if e.gross_amount is not None
-                   else Decimal(str(e.total_dare)))
-        if e.doc_type in ("KR", "DR", "DG"):
-            # Documenti-fattura: hanno un proprio stato aperto/pagato (is_paid).
-            # Contano nel saldo SOLO finché sono aperti — una volta pagati,
-            # il pagamento/incasso collegato li azzera (non va sommato di nuovo).
-            segno = Decimal("-1") if e.doc_type == "DG" else Decimal("1")
-            if not e.is_reversed and not e.is_paid:
-                saldo_aperto += segno * importo
-            stato = "Stornato" if e.is_reversed else ("Pagato/Incassato" if e.is_paid else "Aperto")
+    if request.method == "POST":
+        customer_id = request.form.get("customer_id", type=int)
+        if not customer_id:
+            flash("Seleziona il cliente.", "danger")
         else:
-            # Pagamenti/incassi (KZ/DZ): non hanno un proprio "aperto" — servono
-            # solo a chiudere la fattura collegata, che si è già azzerata sopra.
-            # Compaiono qui solo per tracciabilità, saldo_aperto invariato.
-            stato = "Stornato" if e.is_reversed else "Eseguito"
-        documenti.append({
-            "entry": e,
-            "importo": importo,
-            "stato": stato,
-        })
+            rows, errors = _parse_lines(request.form, materials)
+            for e in errors:
+                flash(e, "danger")
+            if rows and not errors:
+                from models import DocumentSequence
+                o = SalesOrder(
+                    doc_number=DocumentSequence.next_number("OR", "31"),
+                    economic_subject_id=customer_id,
+                    note=request.form.get("note", "").strip(),
+                    created_by_id=current_user.id,
+                )
+                db.session.add(o)
+                db.session.flush()
+                for r in rows:
+                    db.session.add(SalesOrderLine(order_id=o.id, material_id=r["material"].id,
+                                                  qty=r["qty"], price=r["price"]))
+                db.session.commit()
+                flash(f"Ordine {o.doc_number} creato — totale {o.total_net:.2f} € netto.", "success")
+                return redirect(url_for("sd.orders"))
 
-    return render_template("gl/partitario.html", party=party, documenti=documenti,
-                           saldo_aperto=saldo_aperto, doc_type_labels=DOC_TYPE_LABELS)
+    order_list = SalesOrder.query.order_by(SalesOrder.id.desc()).all()
+    return render_template("sd/orders.html", orders=order_list,
+                           customers=customers, materials=materials)
 
 
-@gl_bp.route("/entry/<int:entry_id>")
+@sd_bp.route("/orders/<int:order_id>/conferma")
 @login_required
-def entry_detail(entry_id):
-    entry = JournalEntry.query.get_or_404(entry_id)
-    return render_template("gl/entry_detail.html", entry=entry)
+def order_confirmation(order_id):
+    """
+    Conferma d'Ordine — documento formale da mandare al cliente, distinto
+    dall'Ordine stesso (SalesOrder) che resta il record di sistema. Non è un
+    nuovo modello dati: rilegge i dati del SalesOrder e li presenta in un
+    layout stampabile pensato per il cliente (niente dettagli interni).
+    """
+    o = SalesOrder.query.get_or_404(order_id)
+    return render_template("sd/order_confirmation.html", o=o)
 
 
-@gl_bp.route("/entry/<int:entry_id>/reverse", methods=["POST"])
+# ══════════════════════════════════════════════════════════════
+# DDT / USCITA MERCI (VL01N + PGI 601) — qui nasce il COSTO DEL VENDUTO
+# ══════════════════════════════════════════════════════════════
+@sd_bp.route("/deliveries", methods=["GET", "POST"])
 @login_required
-def entry_reverse(entry_id):
+def deliveries():
+    open_orders = [o for o in SalesOrder.query.order_by(SalesOrder.id.desc()).all()
+                   if o.status == "aperto"]
+
+    if request.method == "POST":
+        order_id = request.form.get("order_id", type=int)
+        o = SalesOrder.query.get(order_id)
+        if o is None:
+            flash("Ordine non trovato.", "danger")
+            return redirect(url_for("sd.deliveries"))
+        if o.status != "aperto":
+            flash(f"L'ordine {o.doc_number} è già stato consegnato.", "warning")
+            return redirect(url_for("sd.deliveries"))
+
+        # ── controllo disponibilità (FIX: MasterLogistic-WMS è ora l'unica
+        # fonte di verità per la giacenza — non usiamo più la copia locale).
+        # ECCEZIONE: se MASTERLOGISTIC_URL non è affatto configurato (non
+        # ancora collegato), si procede SENZA controllo invece di bloccare
+        # in toto — utile per collaudare il resto del ciclo prima che il
+        # collegamento sia pronto. Se invece l'URL C'È ma non risponde
+        # (problema di rete reale), resta bloccato come prima: quello è un
+        # rischio concreto di spedire merce che non c'è, non da bypassare.
+        stock_verificato = True
+        try:
+            to_ship = []
+            for l in o.lines:
+                residual = Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0))
+                if residual <= 0:
+                    continue
+                stock_wms = get_stock(l.material.code)
+                disponibile = Decimal(str(stock_wms.get("stock", 0))) if stock_wms else Decimal("0")
+                if disponibile < residual:
+                    flash(f"Giacenza insufficiente per {l.material.code} su MasterLogistic-WMS: "
+                          f"disponibili {float(disponibile):.0f}, richiesti {float(residual):.0f}. "
+                          f"Registra prima un'Entrata Merci (MM).", "danger")
+                    return redirect(url_for("sd.deliveries"))
+                to_ship.append((l, residual))
+        except LogisticError as e:
+            if "non configurato" in str(e):
+                stock_verificato = False
+                to_ship = []
+                for l in o.lines:
+                    residual = Decimal(str(l.qty)) - Decimal(str(l.qty_delivered or 0))
+                    if residual > 0:
+                        to_ship.append((l, residual))
+                flash("MasterLogistic-WMS non è collegato: DDT registrato SENZA controllo giacenza reale. "
+                      "Collega MASTERLOGISTIC_URL appena possibile per riattivare la verifica.", "warning")
+            else:
+                flash(str(e), "danger")
+                return redirect(url_for("sd.deliveries"))
+        if not to_ship:
+            flash("Nulla da consegnare su questo ordine.", "warning")
+            return redirect(url_for("sd.deliveries"))
+
+        try:
+            from models import DocumentSequence
+            d = Delivery(
+                doc_number=DocumentSequence.next_number("DL", "32"),
+                order_id=o.id, economic_subject_id=o.economic_subject_id,
+                created_by_id=current_user.id, stock_verified=stock_verificato,
+            )
+            db.session.add(d)
+            db.session.flush()
+
+            # ── PGI: scarico giacenza + scrittura COGS ───────
+            cogs_acc = _acc("450000")
+            journal_lines = []
+            total_cogs = Decimal("0")
+            for l, qty in to_ship:
+                unit_cost = Decimal(str(l.material.standard_cost))
+                line_cogs = (qty * unit_cost).quantize(Decimal("0.01"))
+                db.session.add(DeliveryLine(delivery_id=d.id, material_id=l.material_id,
+                                            qty=qty, price=l.price, unit_cost=unit_cost))
+                # NOTA (decisione di Mauri): per ora MasterLedger SOLO LEGGE la
+                # giacenza da MasterLogistic-WMS (controllo disponibilità qui
+                # sopra), non scrive ancora. Lo scarico fisico avviene nel
+                # processo di MasterLogistic-WMS stesso (evasione/spedizione).
+                l.qty_delivered = Decimal(str(l.qty_delivered or 0)) + qty
+                if line_cogs > 0:
+                    inv_acc = _acc(l.material.inventory_account_code)
+                    journal_lines.append({"account_id": cogs_acc.id, "dare": line_cogs, "avere": 0,
+                                          "description": f"COGS {l.material.code} × {float(qty):.0f}"})
+                    journal_lines.append({"account_id": inv_acc.id, "dare": 0, "avere": line_cogs,
+                                          "description": f"Scarico {l.material.code}"})
+                    total_cogs += line_cogs
+
+            if journal_lines:
+                entry = post_journal_entry(
+                    doc_type="SA", prefix="10", doc_date=None,
+                    description=f"Uscita merci DDT {d.doc_number} (ord. {o.doc_number}) — Costo del Venduto",
+                    lines=journal_lines, source_module="VENDITE",
+                    reference=d.doc_number, created_by_id=current_user.id, commit=False,
+                )
+                d.cogs_entry_id = entry.id
+
+            if all(Decimal(str(l.qty_delivered or 0)) >= Decimal(str(l.qty)) for l in o.lines):
+                o.status = "consegnato"
+            db.session.commit()
+            flash(f"DDT {d.doc_number} registrato — Uscita Merci eseguita, "
+                  f"Costo del Venduto {float(total_cogs):.2f} € contabilizzato.", "success")
+        except (UnbalancedEntryError, ValueError, LogisticError) as e:
+            db.session.rollback()
+            flash(str(e), "danger")
+        return redirect(url_for("sd.deliveries"))
+
+    delivery_list = Delivery.query.order_by(Delivery.id.desc()).all()
+    return render_template("sd/deliveries.html", deliveries=delivery_list,
+                           open_orders=open_orders)
+
+
+@sd_bp.route("/deliveries/<int:delivery_id>/reverse", methods=["POST"])
+@login_required
+def deliveries_reverse(delivery_id):
+    """Fase 4 (progettazione parti mancanti, punto 4) — storno di dominio."""
+    reason = (request.form.get("reason") or "").strip()
     try:
-        new_entry = reverse_journal_entry(entry_id, created_by_id=current_user.id)
-        flash(f"Documento stornato correttamente. Nuovo documento: {new_entry.doc_number}.", "success")
-    except ValueError as e:
+        reverse_delivery(delivery_id, reason, created_by_id=current_user.id)
+        flash("DDT stornato: quantità ordine ripristinate e Costo del Venduto contro-mosso.", "success")
+    except ReversalError as e:
         flash(str(e), "danger")
-    return redirect(url_for("gl.entry_detail", entry_id=entry_id))
+    return redirect(url_for("sd.deliveries"))
 
 
-@gl_bp.route("/journal_entry", methods=["GET", "POST"])
+# ══════════════════════════════════════════════════════════════
+# FATTURAZIONE DDT (VF01) — crea la fattura DR integrata con AR/FatturaPA
+# ══════════════════════════════════════════════════════════════
+@sd_bp.route("/billing", methods=["GET", "POST"])
 @login_required
-def journal_entry():
-    """Prima nota — Registrazione manuale in Prima Nota (General Journal Entry)."""
-    accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
+def billing():
+    to_bill = Delivery.query.filter_by(billing_entry_id=None).order_by(Delivery.id.desc()).all()
     cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
 
     if request.method == "POST":
-        doc_date_str = request.form.get("doc_date")
-        description = request.form.get("description", "").strip()
-        account_ids = request.form.getlist("account_id[]")
-        pks = request.form.getlist("pk[]")           # '40' = Dare, '50' = Avere
-        amounts = request.form.getlist("amount[]")
-        cost_centers_sel = request.form.getlist("cost_center_id[]")
+        delivery_id = request.form.get("delivery_id", type=int)
+        d = Delivery.query.get(delivery_id)
+        if d is None:
+            flash("DDT non trovato.", "danger")
+            return redirect(url_for("sd.billing"))
+        if d.is_billed:
+            flash(f"Il DDT {d.doc_number} è già stato fatturato.", "warning")
+            return redirect(url_for("sd.billing"))
 
-        lines = []
-        try:
-            if not (len(account_ids) == len(pks) == len(amounts) == len(cost_centers_sel)):
-                raise ValueError("Righe contabili incomplete o alterate.")
-            for acc_id, pk, amt, cc in zip(account_ids, pks, amounts, cost_centers_sel):
-                if not acc_id and not amt:
-                    continue
-                if not acc_id or not amt or pk not in ("40", "50"):
-                    raise ValueError("Ogni riga deve indicare conto, lato Dare/Avere e importo.")
-                amount = Decimal(amt.replace(",", "."))
-                account, center = validate_co_assignment(int(acc_id), int(cc) if cc else None)
-                lines.append({
-                    "account_id": account.id,
-                    "dare": amount if pk == "40" else 0,
-                    "avere": amount if pk == "50" else 0,
-                    "cost_center_id": center.id if center else None,
-                })
-        except (InvalidOperation, ValueError, TypeError, COValidationError) as e:
-            flash(str(e) or "Righe contabili non valide.", "danger")
-            return render_template("gl/journal_entry.html", accounts=accounts, cost_centers=cost_centers)
-
-        if len(lines) < 2:
-            flash("Servono almeno due righe (una in Dare e una in Avere).", "danger")
-            return render_template("gl/journal_entry.html", accounts=accounts, cost_centers=cost_centers)
+        cost_center_id = request.form.get("cost_center_id", type=int)
+        cost_center = CostCenter.query.get(cost_center_id) if cost_center_id else None
 
         try:
-            doc_date = datetime.strptime(doc_date_str, "%Y-%m-%d").date() if doc_date_str else None
+            ar_acc = AccountMapping.get_or_error("crediti_clienti")
+            vat_acc = AccountMapping.get_or_error("iva_debito")
+            # Conto ricavi scelto in base al canale del cliente: 'subappalto'
+            # (lavori per conto di un appaltatore principale) → 4000,
+            # 'affidamento_diretto' (grande committente senza intermediari)
+            # → 4001. Se il cliente non è ancora qualificato, si ricade sul
+            # conto storico 4000 e lo si segnala all'utente, così se ne accorge
+            # e può classificare l'anagrafica (Soggetti Economici).
+            channel = d.party.revenue_channel if d.party else None
+            if channel == "affidamento_diretto":
+                rev_acc = _acc("4001")
+            else:
+                rev_acc = _acc("4000")
+                if channel is None:
+                    flash(f"Cliente {d.party.name if d.party else ''} senza canale ricavo qualificato: "
+                          f"fatturato su 4000 (Subappalto) di default. Imposta il canale in Soggetti Economici "
+                          f"se si tratta invece di un affidamento diretto.", "warning")
+
+            total_net = Decimal("0")
+            total_vat = Decimal("0")
+            journal_lines = []
+            inv_rows = []
+            for l in d.lines:
+                net = (Decimal(str(l.qty)) * Decimal(str(l.price))).quantize(Decimal("0.01"))
+                vat = (net * Decimal(str(l.material.vat_rate)) / 100).quantize(Decimal("0.01"))
+                total_net += net
+                total_vat += vat
+                journal_lines.append({"account_id": rev_acc.id, "dare": 0, "avere": net,
+                                      "description": f"{l.material.code} - {l.material.description}",
+                                      "cost_center_id": cost_center.id if cost_center else None})
+                # Caratteri ASCII semplici SOLO qui: questa stringa finisce
+                # verbatim nel campo <Descrizione> dell'XML FatturaPA (vedi
+                # services/fatturapa.py). Em-dash (—), simbolo moltiplicazione
+                # (×) e simbolo euro (€) sono stati respinti da fatturacheck.it
+                # come "caratteri non validi" — meglio trattino, "x" e nessun
+                # simbolo valuta (l'importo è già in colonna a parte).
+                inv_rows.append((f"{l.material.code} - {l.material.description} "
+                                 f"({float(l.qty):.0f} {l.material.uom} x {float(l.price):.2f})",
+                                 net, Decimal(str(l.material.vat_rate))))
+            gross = total_net + total_vat
+            journal_lines.insert(0, {"account_id": ar_acc.id, "dare": gross, "avere": 0})
+            if total_vat:
+                journal_lines.append({"account_id": vat_acc.id, "dare": 0, "avere": total_vat})
+
+            vat_rates = {r[2] for r in inv_rows}
             entry = post_journal_entry(
-                doc_type="SA", prefix="10",
-                doc_date=doc_date, description=description or "Prima Nota Manuale",
-                lines=lines, source_module="LEDGER", created_by_id=current_user.id,
+                doc_type="DR", prefix="14", doc_date=None,
+                description=f"Fattura da DDT {d.doc_number} (ord. {d.order.doc_number})",
+                lines=journal_lines, source_module="VENDITE",
+                reference=d.doc_number, created_by_id=current_user.id,
+                economic_subject_id=d.economic_subject_id, gross_amount=gross,
+                vat_rate=(vat_rates.pop() if len(vat_rates) == 1 else None), commit=False,
             )
-            flash(f"Documento {entry.doc_number} registrato correttamente in Prima Nota.", "success")
+            for n, (desc, net, rate) in enumerate(inv_rows, start=1):
+                db.session.add(InvoiceLine(entry_id=entry.id, line_number=n, description=desc,
+                                           amount=net, vat_rate=rate, account_id=rev_acc.id))
+            d.billing_entry_id = entry.id
+            db.session.commit()
+            flash(f"Fattura {entry.doc_number} creata da DDT {d.doc_number} — "
+                  f"totale {float(gross):.2f} € (imponibile {float(total_net):.2f} + "
+                  f"IVA {float(total_vat):.2f}).", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
-        except (UnbalancedEntryError, COValidationError, ValueError) as e:
+        except (UnbalancedEntryError, ValueError) as e:
+            db.session.rollback()
             flash(str(e), "danger")
+        return redirect(url_for("sd.billing"))
 
-    return render_template("gl/journal_entry.html", accounts=accounts, cost_centers=cost_centers)
+    billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None)) \
+                           .order_by(Delivery.id.desc()).limit(30).all()
+    return render_template("sd/billing.html", to_bill=to_bill, billed=billed, cost_centers=cost_centers)
 
 
-@gl_bp.route("/ai/suggerisci", methods=["POST"])
+# ══════════════════════════════════════════════════════════════
+# REPORT MARGINI — Ricavi vs Costo del Venduto per documento
+# ══════════════════════════════════════════════════════════════
+@sd_bp.route("/margini")
 @login_required
-def ai_suggerisci():
-    """
-    Suggerimento AI per la Prima Nota: prende una descrizione in linguaggio
-    naturale e/o un documento PDF caricato (es. una fattura) e propone le
-    righe (conto, Dare/Avere, importo) da mostrare PRE-COMPILATE nel form —
-    l'utente le controlla e conferma lui stesso con "Registra Documento".
-    Questa rotta non scrive MAI su JournalEntry: non passa da
-    post_journal_entry, si limita a restituire un suggerimento.
-
-    Accetta sia JSON semplice ({"descrizione": "..."}) sia multipart/form-data
-    (campo "descrizione" opzionale + campo file "documento" opzionale).
-    """
-    file_pdf = request.files.get("documento")
-    if file_pdf is not None and file_pdf.filename:
-        descrizione = (request.form.get("descrizione") or "").strip()
-        tipo_documento = (request.form.get("tipo_documento") or "").strip() or None
-    else:
-        payload = request.get_json(silent=True) or {}
-        descrizione = (payload.get("descrizione") or "").strip()
-        tipo_documento = (payload.get("tipo_documento") or "").strip() or None
-        file_pdf = None
-
-    testo_documento = None
-    if file_pdf is not None:
-        if not file_pdf.filename.lower().endswith(".pdf"):
-            return jsonify({"error": "Per ora accetto solo file PDF."}), 400
-        try:
-            testo_documento, pagine_lette = estrai_testo_pdf(file_pdf.stream)
-        except AISuggestionError as e:
-            return jsonify({"error": str(e)}), 400
-        if not testo_documento:
-            return jsonify({"error": "Non sono riuscito a leggere testo da questo PDF — probabilmente è "
-                                      "una scansione/immagine senza testo selezionabile (serve OCR, non ancora "
-                                      "disponibile). Prova a descrivere l'operazione a mano qui sopra."}), 400
-
-    if not descrizione and not testo_documento:
-        return jsonify({"error": "Descrivi l'operazione oppure carica un documento PDF."}), 400
-
-    accounts = Account.query.filter_by(active=True).order_by(Account.code).all()
-    code_to_name = {a.code: a.name for a in accounts}
-
-    # Classificazione deterministica (a regole, non AI) del documento in una
-    # classe nota di operazione — se riconosciuta, restringe l'AI ai conti
-    # esatti di quella classe invece di lasciarla scegliere su tutto il
-    # piano dei conti. Se il documento non rientra in nessuna classe nota,
-    # o la classe non ha uno schema fisso (es. rettifica generica), si
-    # procede comunque con l'AI generica ma si segnala l'incertezza.
-    testo_da_classificare = f"{descrizione}\n{testo_documento or ''}"
-    classe_chiave, confidenza_classe = classifica(testo_da_classificare)
-    guida_extra = None
-    contatta_commercialista = False
-    motivo_alert = None
-    classe_nome = None
-    rettifica_chiave = None
-
-    if classe_chiave and not CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
-        # una delle classi ordinarie riconosciuta con schema fisso
-        classe_nome = CLASSI_OPERAZIONE[classe_chiave]["nome"]
-        if confidenza_classe >= 0.6:
-            guida_extra = guida_per_classe(classe_chiave, code_to_name)
-    else:
-        # non è una delle ordinarie (o è RETTIFICA_GENERICA): prova il
-        # catalogo dettagliato delle rettifiche (37 sottoclassi A1-H3)
-        rettifica_chiave, confidenza_rettifica = classifica_rettifica(testo_da_classificare)
-        if rettifica_chiave:
-            sc = CATALOGO_RETTIFICHE[rettifica_chiave]
-            classe_nome = f"{rettifica_chiave} — {sc['nome']}"
-            if confidenza_rettifica >= 0.6:
-                guida_extra = guida_per_rettifica(rettifica_chiave, code_to_name)
-            if sc.get("conto_mancante"):
-                contatta_commercialista = True
-                motivo_alert = (f"Sottoclasse '{sc['nome']}' richiede un conto che non esiste "
-                                 f"ancora nel piano dei conti: nessuna proposta completa possibile.")
-            elif sc["livello"] == "M":
-                contatta_commercialista = True
-                motivo_alert = (f"Sottoclasse '{sc['nome']}' è di livello M (sempre manuale): "
-                                 f"richiede giudizio professionale specifico, non solo il click "
-                                 f"di conferma ordinario.")
-        else:
-            contatta_commercialista = True
-            motivo_alert = "Documento non riconducibile a nessuna classe o sottoclasse nota."
-
-    try:
-        suggerimento = suggerisci_scrittura(descrizione, accounts, testo_documento=testo_documento,
-                                             tipo_documento=tipo_documento, guida_extra=guida_extra)
-    except AISuggestionError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Errore imprevisto: {e}"}), 500
-
-    # L'AI conosce solo i CODICI conto (non gli id del database) — li risolviamo qui.
-    code_to_id = {a.code: a.id for a in accounts}
-    righe_risolte = []
-    avvisi = []
-    if guida_extra and classe_chiave and not CLASSI_OPERAZIONE[classe_chiave].get("sempre_incerta"):
-        conti_ammessi_classe = set(
-            CLASSI_OPERAZIONE[classe_chiave].get("dare_fissi", []) +
-            CLASSI_OPERAZIONE[classe_chiave].get("dare_variabili", []) +
-            CLASSI_OPERAZIONE[classe_chiave].get("avere_fissi", []) +
-            CLASSI_OPERAZIONE[classe_chiave].get("avere_variabili", [])
-        )
-        for line in suggerimento.get("lines", []):
-            if str(line.get("account_code", "")).strip() not in conti_ammessi_classe:
-                contatta_commercialista = True
-                motivo_alert = (f"L'AI ha proposto un conto fuori dallo schema della classe "
-                                 f"'{classe_nome}'.")
-                break
-    elif guida_extra and rettifica_chiave:
-        conti_ammessi_rettifica = set()
-        for variante in CATALOGO_RETTIFICHE[rettifica_chiave].get("schema", []):
-            for riga in variante:
-                conti_ammessi_rettifica.add(riga["conto"])
-        for line in suggerimento.get("lines", []):
-            if str(line.get("account_code", "")).strip() not in conti_ammessi_rettifica:
-                contatta_commercialista = True
-                motivo_alert = (f"L'AI ha proposto un conto fuori dallo schema della sottoclasse "
-                                 f"'{classe_nome}'.")
-                break
-    for line in suggerimento.get("lines", []):
-        code = str(line.get("account_code", "")).strip()
-        acc_id = code_to_id.get(code)
-        if not acc_id:
-            avvisi.append(f'Conto "{code}" proposto dall\'AI non esiste nel piano dei conti: riga saltata.')
-            continue
-        try:
-            amount = float(line.get("amount") or 0)
-        except (TypeError, ValueError):
-            avvisi.append(f'Importo non valido per il conto "{code}": riga saltata.')
-            continue
-        righe_risolte.append({
-            "account_id": acc_id,
-            "pk": "40" if str(line.get("pk")) == "40" else "50",
-            "amount": amount,
-        })
-
-    if len(righe_risolte) < 2:
-        return jsonify({"error": "Dopo aver verificato i conti proposti, non restano abbastanza righe valide. "
-                                  "Prova a riformulare la richiesta.", "avvisi": avvisi}), 400
-
-    totale_dare = sum(r["amount"] for r in righe_risolte if r["pk"] == "40")
-    totale_avere = sum(r["amount"] for r in righe_risolte if r["pk"] == "50")
-    if abs(totale_dare - totale_avere) > 0.01:
-        contatta_commercialista = True
-        motivo_alert = (f"La proposta non pareggia (Dare {totale_dare:.2f} / Avere {totale_avere:.2f}): "
-                         f"verificare con il commercialista prima di registrare.")
-
-    return jsonify({
-        "description": suggerimento.get("description") or descrizione,
-        "lines": righe_risolte,
-        "note": suggerimento.get("note"),
-        "avvisi": avvisi,
-        "classe_operazione": classe_nome,
-        "contatta_commercialista": contatta_commercialista,
-        "motivo_alert": motivo_alert,
-    })
+def margini():
+    billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None)) \
+                           .order_by(Delivery.id.desc()).all()
+    rows = []
+    tot_rev = tot_cogs = 0.0
+    for d in billed:
+        rev = d.total_net
+        cogs = d.total_cogs
+        rows.append({"delivery": d, "revenue": rev, "cogs": cogs,
+                     "margin": rev - cogs,
+                     "margin_pct": (rev - cogs) / rev * 100 if rev else 0})
+        tot_rev += rev
+        tot_cogs += cogs
+    return render_template("sd/margini.html", rows=rows, tot_rev=tot_rev,
+                           tot_cogs=tot_cogs, tot_margin=tot_rev - tot_cogs,
+                           tot_pct=(tot_rev - tot_cogs) / tot_rev * 100 if tot_rev else 0)
