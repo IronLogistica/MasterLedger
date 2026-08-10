@@ -355,6 +355,7 @@ def account_mapping():
         "banca_principale": "patrimoniale_attivo", "iva_credito": "patrimoniale_attivo",
         "iva_debito": "patrimoniale_passivo", "crediti_clienti": "patrimoniale_attivo",
         "debiti_fornitori": "patrimoniale_passivo", "cespiti_impianti": "patrimoniale_attivo",
+        "fatture_da_emettere": "patrimoniale_attivo",
         "ammortamenti_costo": "costo", "fondo_ammortamento": "patrimoniale_passivo",
         "ritenute_professionisti": "patrimoniale_passivo",
         "abbuoni_attivi": "costo", "abbuoni_passivi": "ricavo",
