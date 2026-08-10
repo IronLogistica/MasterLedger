@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header"><span>🏷️</span> Centri di Costo/Ricavo</div>
+  <div class="card-body">
+    <div class="info-box">
+      Un'unica dimensione usata sia per i costi (obbligatoria sui conti di costo) sia per i ricavi
+      (facoltativa) — come il Centro di Profitto in SAP: permette di vedere quanto rende un
+      reparto/commessa, non solo quanto costa. Clicca un centro per vederne il mastrino completo.
+    </div>
+    <table class="masterledger-table">
+      <thead><tr><th>Codice</th><th>Nome</th><th class="td-num">Movimenti</th><th class="td-num">Costi €</th><th class="td-num">Ricavi €</th><th class="td-num">Margine €</th></tr></thead>
+      <tbody>
+        {% for c in centers %}
+        <tr>
+          <td class="mono"><a href="{{ url_for('gl.cost_center_ledger', center_id=c.id) }}">{{ c.code }}</a></td>
+          <td><a href="{{ url_for('gl.cost_center_ledger', center_id=c.id) }}">{{ c.name }}</a></td>
+          <td class="td-num">{{ totali[c.id].n_movimenti }}</td>
+          <td class="td-num">{{ "%.2f"|format(totali[c.id].totale_costi) }}</td>
+          <td class="td-num">{{ "%.2f"|format(totali[c.id].totale_ricavi) }}</td>
+          <td class="td-num"><strong>{{ "%.2f"|format(totali[c.id].totale_ricavi - totali[c.id].totale_costi) }}</strong></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6">Nessun centro di costo/ricavo definito.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
