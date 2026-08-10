@@ -7,7 +7,19 @@
       Un'unica dimensione usata sia per i costi (obbligatoria sui conti di costo) sia per i ricavi
       (facoltativa) — come il Centro di Profitto in SAP: permette di vedere quanto rende un
       reparto/commessa, non solo quanto costa. Clicca un centro per vederne il mastrino completo.
+      Per un'analisi CO più ricca (filtri per data/conto/tipo), vedi anche il
+      <a href="{{ url_for('costs.report') }}">Report Centri di Costo</a>.
     </div>
+
+    <form method="POST" action="{{ url_for('costs.cost_center_new') }}" style="margin-bottom:18px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ url_for('gl.cost_centers_list') }}">
+      <div class="form-grid">
+        <div class="form-group"><label>Codice</label><input type="text" name="code" placeholder="es. CC-LOG-01" required></div>
+        <div class="form-group"><label>Nome</label><input type="text" name="name" placeholder="es. Logistica" required></div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">➕ Crea Centro di Costo/Ricavo</button></div>
+    </form>
     <table class="masterledger-table">
       <thead><tr><th>Codice</th><th>Nome</th><th class="td-num">Movimenti</th><th class="td-num">Costi €</th><th class="td-num">Ricavi €</th><th class="td-num">Margine €</th></tr></thead>
       <tbody>
