@@ -28,6 +28,7 @@ from models import (
     JournalEntry, JournalLine, InvoiceInstallment, PaymentAllocation,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.co import validate_co_assignment, COValidationError
 from services.reversals import reverse_delivery, ReversalError
 from services.logistic_client import get_stock, LogisticError
 
@@ -358,9 +359,11 @@ def order_confirmation(order_id):
 def deliveries():
     open_orders = [o for o in SalesOrder.query.order_by(SalesOrder.id.desc()).all()
                    if o.status == "aperto"]
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
 
     if request.method == "POST":
         order_id = request.form.get("order_id", type=int)
+        cost_center_id = request.form.get("cost_center_id", type=int)
         o = SalesOrder.query.get(order_id)
         if o is None:
             flash("Ordine non trovato.", "danger")
@@ -420,7 +423,10 @@ def deliveries():
             db.session.flush()
 
             # ── PGI: scarico giacenza + scrittura COGS ───────
-            cogs_acc = _acc("450000")
+            # Il Costo del Venduto (450000) è CO-rilevante — il centro di
+            # costo/ricavo è quindi richiesto qui, sempre (a differenza di
+            # MM dove serve solo in caso di varianza prezzo).
+            cogs_acc, cogs_cost_center = validate_co_assignment(_acc("450000").id, cost_center_id)
             journal_lines = []
             total_cogs = Decimal("0")
             for l, qty in to_ship:
@@ -436,7 +442,8 @@ def deliveries():
                 if line_cogs > 0:
                     inv_acc = _acc(l.material.inventory_account_code)
                     journal_lines.append({"account_id": cogs_acc.id, "dare": line_cogs, "avere": 0,
-                                          "description": f"COGS {l.material.code} × {float(qty):.0f}"})
+                                          "description": f"COGS {l.material.code} × {float(qty):.0f}",
+                                          "cost_center_id": cogs_cost_center.id if cogs_cost_center else None})
                     journal_lines.append({"account_id": inv_acc.id, "dare": 0, "avere": line_cogs,
                                           "description": f"Scarico {l.material.code}"})
                     total_cogs += line_cogs
@@ -462,7 +469,7 @@ def deliveries():
 
     delivery_list = Delivery.query.order_by(Delivery.id.desc()).all()
     return render_template("sd/deliveries.html", deliveries=delivery_list,
-                           open_orders=open_orders)
+                           open_orders=open_orders, cost_centers=cost_centers)
 
 
 @sd_bp.route("/deliveries/<int:delivery_id>/reverse", methods=["POST"])
