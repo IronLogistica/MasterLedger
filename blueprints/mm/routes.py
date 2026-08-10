@@ -31,6 +31,10 @@ from models import (
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
 from services.reversals import reverse_goods_receipt, ReversalError
+from services.mm_invoice_quantities import (
+    actual_invoiced_qty, reconcile_invoiced_qty, has_untracked_active_invoice,
+    lock_po_lines, has_tracked_active_invoice,
+)
 
 mm_bp = Blueprint("mm", __name__, template_folder="../../templates/mm")
 
@@ -205,9 +209,19 @@ def goods_receipts_reverse(receipt_id):
 @mm_bp.route("/invoice-verification", methods=["GET", "POST"])
 @login_required
 def invoice_verification():
-    pos = [p for p in PurchaseOrder.query.order_by(PurchaseOrder.id.desc()).all()
-           if any(Decimal(str(l.qty_received or 0)) > Decimal(str(l.qty_invoiced or 0))
-                  for l in p.lines)]
+    # qty_invoiced è solo una cache: per mostrare gli ordini ancora fatturabili
+    # usiamo sempre la quantità reale ricostruita dalle fatture MM attive.
+    actual_qty_by_line = {}
+    pos = []
+    for p in PurchaseOrder.query.order_by(PurchaseOrder.id.desc()).all():
+        has_open_qty = False
+        for l in p.lines:
+            actual = actual_invoiced_qty(l.id)
+            actual_qty_by_line[l.id] = actual
+            if Decimal(str(l.qty_received or 0)) > actual:
+                has_open_qty = True
+        if has_open_qty:
+            pos.append(p)
     verified = (JournalEntry.query.filter_by(source_module="ACQUISTI", doc_type="KR", is_reversed=False)
                .order_by(JournalEntry.id.desc()).limit(30).all())
 
@@ -223,14 +237,28 @@ def invoice_verification():
         cost_center_id = request.form.get("cost_center_id", type=int)
 
         try:
+            # Serializza fatturazioni/eliminazioni/storni concorrenti sullo
+            # stesso OA; dopo il lock le quantità vengono rilette da zero.
+            locked_lines = lock_po_lines(po.id)
+
+            # Un KR legacy reale ma senza InvoiceVerificationLine non consente
+            # di attribuire quantità affidabili alle singole righe: meglio
+            # fermarsi e riconciliarlo che rischiare una doppia fatturazione.
+            if has_untracked_active_invoice(po):
+                raise ValueError(
+                    f"L'ordine {po.doc_number} ha una Verifica Fattura MM attiva non tracciata "
+                    "per riga. Riconcilia il documento prima di registrare un'altra fattura."
+                )
+
             # ── THREE-WAY MATCH: Ordinato vs Ricevuto vs Fatturato ──
             blocked = []
             match_rows = []
-            for l in po.lines:
+            for l in locked_lines:
+                actual_invoiced = actual_invoiced_qty(l.id)
                 qty = request.form.get(f"inv_qty_{l.id}", type=float)
                 price = request.form.get(f"inv_price_{l.id}", type=float)
                 if qty is None:
-                    qty = float(Decimal(str(l.qty_received or 0)) - Decimal(str(l.qty_invoiced or 0)))
+                    qty = float(Decimal(str(l.qty_received or 0)) - actual_invoiced)
                 if price is None:
                     price = float(l.price)
                 qty = Decimal(str(qty))
@@ -238,7 +266,7 @@ def invoice_verification():
                 if qty <= 0:
                     continue
 
-                open_qty = Decimal(str(l.qty_received or 0)) - Decimal(str(l.qty_invoiced or 0))
+                open_qty = Decimal(str(l.qty_received or 0)) - actual_invoiced
                 # Regola 1 — quantità: non si fattura più del RICEVUTO
                 if qty > open_qty:
                     blocked.append(f"{l.material.code}: fatturati {float(qty):.0f} ma ricevuti "
@@ -252,7 +280,8 @@ def invoice_verification():
                         blocked.append(f"{l.material.code}: prezzo fattura {float(price):.4f} € vs "
                                        f"prezzo ordine {float(po_price):.4f} € — scostamento "
                                        f"{float(diff_pct):.1f}% oltre tolleranza {float(PRICE_TOLERANCE_PCT):.0f}%.")
-                match_rows.append({"line": l, "qty": qty, "price": price})
+                match_rows.append({"line": l, "qty": qty, "price": price,
+                                   "actual_invoiced": actual_invoiced})
 
             if not match_rows:
                 raise ValueError("Nessuna quantità da fatturare.")
@@ -301,7 +330,9 @@ def invoice_verification():
                                                           f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)",
                                           "cost_center_id": variance_cost_center.id if variance_cost_center else None})
 
-                l.qty_invoiced = Decimal(str(l.qty_invoiced or 0)) + r["qty"]
+                # Riallinea anche la cache: non propagare un eventuale valore
+                # storico stale nel nuovo totale.
+                l.qty_invoiced = r["actual_invoiced"] + r["qty"]
             total_vat = (total_net_invoice * vat_rate / 100).quantize(Decimal("0.01"))
             gross = total_net_invoice + total_vat
             if total_vat:
@@ -333,6 +364,7 @@ def invoice_verification():
         return redirect(url_for("mm.invoice_verification"))
 
     return render_template("mm/invoice_verification.html", pos=pos,
+                           actual_qty_by_line=actual_qty_by_line,
                            tolerance=float(PRICE_TOLERANCE_PCT),
                            cost_centers=CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all(),
                            verified=verified)
@@ -404,10 +436,20 @@ def invoice_verification_elimina(entry_id):
         flash("Questa fattura non è stata generata dalla Verifica Fattura MM — non eliminabile da qui.", "danger")
         return redirect(url_for("mm.invoice_verification"))
     doc_number = entry.doc_number
-    for r in InvoiceVerificationLine.query.filter_by(entry_id=entry.id).all():
-        r.po_line.qty_invoiced = max(Decimal("0"), Decimal(str(r.po_line.qty_invoiced or 0)) - Decimal(str(r.qty)))
+    tracked_rows = InvoiceVerificationLine.query.filter_by(entry_id=entry.id).all()
+    affected_line_ids = sorted({r.po_line_id for r in tracked_rows})
+    affected_po_ids = sorted({r.po_line.po_id for r in tracked_rows})
+    for po_id in affected_po_ids:
+        lock_po_lines(po_id)
     try:
         _elimina_scrittura_mm(entry.id)
+        db.session.flush()
+        # Ricalcolo post-cancellazione dalla fonte autorevole: sottrarre dalla
+        # cache propagherebbe un eventuale valore stale preesistente.
+        for line_id in affected_line_ids:
+            po_line = db.session.get(PurchaseOrderLine, line_id)
+            if po_line is not None:
+                reconcile_invoiced_qty(po_line)
     except ValueError as e:
         db.session.rollback()
         flash(str(e), "danger")
@@ -423,11 +465,23 @@ def goods_receipt_elimina(receipt_id):
     """Elimina un'Entrata Merci — blocca se una sua riga risulta già
     fatturata oltre quanto resterebbe ricevuto dopo l'eliminazione."""
     gr = GoodsReceipt.query.get_or_404(receipt_id)
+    locked_by_id = {line.id: line for line in lock_po_lines(gr.po_id)}
+    if has_untracked_active_invoice(gr.po):
+        flash(
+            f"L'ordine {gr.po.doc_number} ha una Verifica Fattura MM attiva non tracciata per riga: "
+            "impossibile verificare con sicurezza le quantità. Riconcilia prima il documento.",
+            "danger",
+        )
+        return redirect(url_for("mm.goods_receipts"))
+
     for gr_line in gr.lines:
-        po_line = gr_line.po_line
+        po_line = locked_by_id[gr_line.po_line_id]
+        # Non fidarsi del contatore cache: lo ricalcoliamo dalle fatture MM
+        # attive prima di decidere se l'eliminazione è davvero bloccata.
+        actual_invoiced = reconcile_invoiced_qty(po_line)
         residual_after = Decimal(str(po_line.qty_received or 0)) - Decimal(str(gr_line.qty))
-        if Decimal(str(po_line.qty_invoiced or 0)) > residual_after:
-            flash(f"{po_line.material.code}: già fatturati {float(po_line.qty_invoiced):.0f}, ma dopo "
+        if actual_invoiced > residual_after:
+            flash(f"{po_line.material.code}: già fatturati {float(actual_invoiced):.0f}, ma dopo "
                   f"l'eliminazione resterebbero ricevuti solo {float(residual_after):.0f} — elimina prima "
                   f"la Verifica Fattura collegata.", "danger")
             return redirect(url_for("mm.goods_receipts"))
@@ -436,7 +490,8 @@ def goods_receipt_elimina(receipt_id):
     entry_id = gr.journal_entry_id
     gr.journal_entry_id = None  # scollega PRIMA di eliminare la scrittura (vincolo FK)
     for gr_line in gr.lines:
-        gr_line.po_line.qty_received = Decimal(str(gr_line.po_line.qty_received or 0)) - Decimal(str(gr_line.qty))
+        po_line = locked_by_id[gr_line.po_line_id]
+        po_line.qty_received = Decimal(str(po_line.qty_received or 0)) - Decimal(str(gr_line.qty))
     db.session.flush()
     if entry_id:
         try:
@@ -456,8 +511,12 @@ def goods_receipt_elimina(receipt_id):
 def purchase_order_elimina(po_id):
     """Elimina un ordine d'acquisto — blocca se ha già Entrate Merci collegate."""
     po = PurchaseOrder.query.get_or_404(po_id)
+    lock_po_lines(po.id)
     if po.receipts:
         flash(f"L'ordine {po.doc_number} ha già Entrate Merci collegate — eliminale prima.", "danger")
+        return redirect(url_for("mm.purchase_orders"))
+    if has_tracked_active_invoice(po.id) or has_untracked_active_invoice(po):
+        flash(f"L'ordine {po.doc_number} ha una Verifica Fattura MM attiva collegata — eliminala prima.", "danger")
         return redirect(url_for("mm.purchase_orders"))
     doc_number = po.doc_number
     db.session.delete(po)  # le righe (PurchaseOrderLine) cascade
