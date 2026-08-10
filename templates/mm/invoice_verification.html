@@ -21,7 +21,7 @@
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="po_id" value="{{ p.id }}">
           <table class="masterledger-table" style="margin-bottom:12px;">
-            <thead><tr><th>Articolo</th><th class="td-num">① Ordinato</th><th class="td-num">Prezzo ordine €</th><th class="td-num">② Ricevuto</th><th class="td-num">già Fatturato</th><th style="width:110px;">③ Q.tà fattura</th><th style="width:120px;">③ Prezzo fattura €</th></tr></thead>
+            <thead><tr><th>Articolo</th><th class="td-num">① Ordinato</th><th class="td-num">Prezzo ordine €</th><th class="td-num">② Ricevuto</th><th class="td-num">già Fatturato</th><th style="width:110px;">③ Q.tà fattura</th><th style="width:120px;">③ Prezzo fattura €</th><th style="width:160px;">Centro di Costo <span style="font-weight:400;">(se varianza)</span></th></tr></thead>
             <tbody>
               {% for l in p.lines %}
               <tr>
@@ -32,6 +32,12 @@
                 <td class="td-num">{{ '%.0f'|format(actual_qty_by_line[l.id]) }}</td>
                 <td><input type="number" step="0.001" min="0" name="inv_qty_{{ l.id }}" value="{{ '%.0f'|format(l.qty_received - actual_qty_by_line[l.id]) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
                 <td><input type="number" step="0.0001" min="0" name="inv_price_{{ l.id }}" value="{{ '%.4f'|format(l.price) }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;"></td>
+                <td>
+                  <select name="cost_center_id_{{ l.id }}" style="width:100%;padding:5px;background:var(--ml-bg);color:var(--ml-text);border:1px solid var(--ml-border);border-radius:4px;">
+                    <option value="">— nessuno —</option>
+                    {% for cc in cost_centers %}<option value="{{ cc.id }}" {{ 'selected' if l.cost_center_id and cc.id == l.cost_center_id }}>{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+                  </select>
+                </td>
               </tr>
               {% endfor %}
             </tbody>
@@ -41,13 +47,6 @@
             <div class="form-group"><label>Data fattura <span class="req">*</span></label><input type="date" name="invoice_date" value="{{ today }}" required></div>
             <div class="form-group"><label>Data registrazione contabile <span class="req">*</span></label><input type="date" name="posting_date" value="{{ today }}" required></div>
             <div class="form-group"><label>Aliquota IVA %</label><input type="number" step="0.01" min="0" max="100" name="vat_rate" value="22"></div>
-            <div class="form-group">
-              <label>Centro di Costo/Ricavo <span style="font-weight:400;">(solo se scatta una varianza prezzo)</span></label>
-              <select name="cost_center_id">
-                <option value="">— nessuno —</option>
-                {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
-              </select>
-            </div>
           </div>
           <button class="btn btn-success" type="submit">Registra MIRO / Verifica Fattura</button>
         </form>
