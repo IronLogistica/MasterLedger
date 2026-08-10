@@ -48,6 +48,33 @@ def _acc(code):
     return a
 
 
+def _form_date(name, label):
+    """Legge una data HTML obbligatoria senza sostituirla silenziosamente con oggi."""
+    raw = (request.form.get(name) or "").strip()
+    if not raw:
+        raise ValueError(f"{label}: data obbligatoria.")
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError(f"{label}: data non valida.")
+
+
+def _form_decimal(name, label, default=None):
+    """Legge un Decimal finito; il default vale solo per un campo davvero vuoto."""
+    raw = request.form.get(name)
+    if raw is None or not raw.strip():
+        if default is None:
+            raise ValueError(f"{label}: valore obbligatorio.")
+        return Decimal(str(default))
+    try:
+        value = Decimal(raw.strip().replace(",", "."))
+    except (InvalidOperation, ValueError):
+        raise ValueError(f"{label}: valore numerico non valido.")
+    if not value.is_finite():
+        raise ValueError(f"{label}: il valore deve essere finito.")
+    return value
+
+
 # ══════════════════════════════════════════════════════════════
 # ORDINI D'ACQUISTO (ME21N)
 # ══════════════════════════════════════════════════════════════
@@ -126,10 +153,13 @@ def goods_receipts():
             return redirect(url_for("mm.goods_receipts"))
 
         try:
+            ddt_date = _form_date("ddt_date", "Data DDT/entrata merci")
+            posting_date = _form_date("posting_date", "Data registrazione MIGO")
             emrf_acc = _acc("165000")
             from models import DocumentSequence
             gr = GoodsReceipt(
                 doc_number=DocumentSequence.next_number("GR", "34"),
+                doc_date=ddt_date,
                 po_id=po.id,
                 ddt_vendor_ref=request.form.get("ddt_vendor_ref", "").strip(),
                 created_by_id=current_user.id,
@@ -141,12 +171,15 @@ def goods_receipts():
             total = Decimal("0")
             received_any = False
             for l in po.lines:
-                qty = request.form.get(f"recv_qty_{l.id}", type=float)
-                if qty is None:
-                    # default: ricevi tutto il residuo
-                    qty = float(Decimal(str(l.qty)) - Decimal(str(l.qty_received or 0)))
-                qty = Decimal(str(qty))
-                if qty <= 0:
+                residual = Decimal(str(l.qty)) - Decimal(str(l.qty_received or 0))
+                qty = _form_decimal(
+                    f"recv_qty_{l.id}",
+                    f"{l.material.code}: quantità ricevuta",
+                    default=residual,
+                )
+                if qty < 0:
+                    raise ValueError(f"{l.material.code}: la quantità ricevuta non può essere negativa.")
+                if qty == 0:
                     continue
                 residual = Decimal(str(l.qty)) - Decimal(str(l.qty_received or 0))
                 if qty > residual:
@@ -171,7 +204,7 @@ def goods_receipts():
             journal_lines.append({"account_id": emrf_acc.id, "dare": 0, "avere": total,
                                   "description": f"EM/RF ordine {po.doc_number}"})
             entry = post_journal_entry(
-                doc_type="SA", prefix="10", doc_date=None,
+                doc_type="SA", prefix="10", doc_date=ddt_date, posting_date=posting_date,
                 description=f"Entrata Merci {gr.doc_number} su OA {po.doc_number}"
                             + (f" — DDT forn. {gr.ddt_vendor_ref}" if gr.ddt_vendor_ref else ""),
                 lines=journal_lines, source_module="MAGAZZINO",
@@ -187,7 +220,8 @@ def goods_receipts():
         return redirect(url_for("mm.goods_receipts"))
 
     receipts = GoodsReceipt.query.order_by(GoodsReceipt.id.desc()).all()
-    return render_template("mm/goods_receipts.html", receipts=receipts, open_pos=open_pos)
+    return render_template("mm/goods_receipts.html", receipts=receipts, open_pos=open_pos,
+                           today=datetime.utcnow().date().isoformat())
 
 
 @mm_bp.route("/goods-receipts/<int:receipt_id>/reverse", methods=["POST"])
@@ -233,10 +267,27 @@ def invoice_verification():
             return redirect(url_for("mm.invoice_verification"))
 
         invoice_ref = request.form.get("invoice_ref", "").strip()
-        vat_rate = Decimal(str(request.form.get("vat_rate", type=float) or 22))
         cost_center_id = request.form.get("cost_center_id", type=int)
 
         try:
+            if not invoice_ref:
+                raise ValueError("Riferimento fattura fornitore obbligatorio.")
+            invoice_date = _form_date("invoice_date", "Data fattura")
+            posting_date = _form_date("posting_date", "Data registrazione MIRO")
+            vat_rate = _form_decimal("vat_rate", "Aliquota IVA", default=22)
+            if vat_rate < 0 or vat_rate > 100:
+                raise ValueError("Aliquota IVA: indicare un valore tra 0 e 100.")
+
+            duplicate = JournalEntry.query.filter_by(
+                source_module="ACQUISTI", doc_type="KR", is_reversed=False,
+                economic_subject_id=po.economic_subject_id, reference=invoice_ref,
+            ).first()
+            if duplicate:
+                raise ValueError(
+                    f"La fattura {invoice_ref} risulta già registrata per questo fornitore "
+                    f"({duplicate.doc_number})."
+                )
+
             # Serializza fatturazioni/eliminazioni/storni concorrenti sullo
             # stesso OA; dopo il lock le quantità vengono rilette da zero.
             locked_lines = lock_po_lines(po.id)
@@ -255,15 +306,20 @@ def invoice_verification():
             match_rows = []
             for l in locked_lines:
                 actual_invoiced = actual_invoiced_qty(l.id)
-                qty = request.form.get(f"inv_qty_{l.id}", type=float)
-                price = request.form.get(f"inv_price_{l.id}", type=float)
-                if qty is None:
-                    qty = float(Decimal(str(l.qty_received or 0)) - actual_invoiced)
-                if price is None:
-                    price = float(l.price)
-                qty = Decimal(str(qty))
-                price = Decimal(str(price))
-                if qty <= 0:
+                open_qty = Decimal(str(l.qty_received or 0)) - actual_invoiced
+                qty = _form_decimal(
+                    f"inv_qty_{l.id}", f"{l.material.code}: quantità fattura",
+                    default=open_qty,
+                )
+                price = _form_decimal(
+                    f"inv_price_{l.id}", f"{l.material.code}: prezzo fattura",
+                    default=l.price,
+                )
+                if qty < 0:
+                    raise ValueError(f"{l.material.code}: la quantità fattura non può essere negativa.")
+                if price < 0:
+                    raise ValueError(f"{l.material.code}: il prezzo fattura non può essere negativo.")
+                if qty == 0:
                     continue
 
                 open_qty = Decimal(str(l.qty_received or 0)) - actual_invoiced
@@ -341,11 +397,11 @@ def invoice_verification():
             journal_lines.append({"account_id": ap_acc.id, "dare": 0, "avere": gross})
 
             entry = post_journal_entry(
-                doc_type="KR", prefix="19", doc_date=None,
-                description=f"Verifica fattura {invoice_ref or 's.n.'} su OA {po.doc_number} "
+                doc_type="KR", prefix="19", doc_date=invoice_date, posting_date=posting_date,
+                description=f"Verifica fattura {invoice_ref} su OA {po.doc_number} "
                             f"(three-way match OK)",
                 lines=journal_lines, source_module="ACQUISTI",
-                reference=invoice_ref or po.doc_number, created_by_id=current_user.id,
+                reference=invoice_ref, created_by_id=current_user.id,
                 economic_subject_id=po.economic_subject_id, gross_amount=gross, commit=False,
             )
             # Traccia riga per riga cosa è stato fatturato — indispensabile
@@ -367,7 +423,7 @@ def invoice_verification():
                            actual_qty_by_line=actual_qty_by_line,
                            tolerance=float(PRICE_TOLERANCE_PCT),
                            cost_centers=CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all(),
-                           verified=verified)
+                           verified=verified, today=datetime.utcnow().date().isoformat())
 
 
 # ══════════════════════════════════════════════════════════════
