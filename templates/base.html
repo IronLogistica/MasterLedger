@@ -30,18 +30,19 @@
     <div class="sidebar-title">Contabilità Generale</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='gl.journal_entry' }}" href="{{ url_for('gl.journal_entry') }}">🧾 Prima nota</a>
 
-    <div class="sidebar-title">Vendite (SD) — dal Preventivo</div>
+    <div class="sidebar-title">Vendite e Spedizione (VS) — dal Preventivo</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.quotations' }}" href="{{ url_for('sd.quotations') }}">📝 Preventivi</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.orders' }}" href="{{ url_for('sd.orders') }}">🧾 Ordini cliente</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.deliveries' }}" href="{{ url_for('sd.deliveries') }}">🚚 DDT / Uscita merci</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.billing' }}" href="{{ url_for('sd.billing') }}">💶 Fatturazione DDT</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='sd.fatture_da_emettere' }}" href="{{ url_for('sd.fatture_da_emettere') }}">🧮 Fatture da Emettere</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.margini' }}" href="{{ url_for('sd.margini') }}">📊 Margini (Costo del Venduto)</a>
 
-    <div class="sidebar-title">Acquisti (MM) — Three-Way Match</div>
+    <div class="sidebar-title">Acquisti e Magazzino (AM) — Verifica a Tre Vie</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.rfqs' }}" href="{{ url_for('mm.rfqs') }}">📨 Richieste di preventivo (RFQ)</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.purchase_orders' }}" href="{{ url_for('mm.purchase_orders') }}">📦 Ordini d'acquisto</a>
-    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.goods_receipts' }}" href="{{ url_for('mm.goods_receipts') }}">📥 MIGO — Entrata merci</a>
-    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.invoice_verification' }}" href="{{ url_for('mm.invoice_verification') }}">🔍 MIRO — Verifica fattura <span class="badge">3-way</span></a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.goods_receipts' }}" href="{{ url_for('mm.goods_receipts') }}">📥 EM — Entrata merci</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='mm.invoice_verification' }}" href="{{ url_for('mm.invoice_verification') }}">🔍 VF — Verifica fattura <span class="badge">verifica a 3 vie</span></a>
 
     <div class="sidebar-title">Produzione (ponte verso MasterProduction)</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.completata' }}" href="{{ url_for('production.completata') }}">🏭 Produzione Completata (COGM)</a>
