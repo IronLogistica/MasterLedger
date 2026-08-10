@@ -25,7 +25,8 @@ from flask_login import login_required, current_user
 from extensions import db
 from models import (
     Account, CostCenter, EconomicSubject, Material, PurchaseOrder, PurchaseOrderLine,
-    GoodsReceipt, GoodsReceiptLine,
+    GoodsReceipt, GoodsReceiptLine, InvoiceVerificationLine, JournalEntry, JournalLine,
+    InvoiceInstallment, PaymentAllocation,
 )
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
@@ -207,6 +208,8 @@ def invoice_verification():
     pos = [p for p in PurchaseOrder.query.order_by(PurchaseOrder.id.desc()).all()
            if any(Decimal(str(l.qty_received or 0)) > Decimal(str(l.qty_invoiced or 0))
                   for l in p.lines)]
+    verified = (JournalEntry.query.filter_by(source_module="ACQUISTI", doc_type="KR", is_reversed=False)
+               .order_by(JournalEntry.id.desc()).limit(30).all())
 
     if request.method == "POST":
         po_id = request.form.get("po_id", type=int)
@@ -314,6 +317,11 @@ def invoice_verification():
                 reference=invoice_ref or po.doc_number, created_by_id=current_user.id,
                 economic_subject_id=po.economic_subject_id, gross_amount=gross, commit=False,
             )
+            # Traccia riga per riga cosa è stato fatturato — indispensabile
+            # per poter eliminare/stornare in sicurezza in futuro, ripristinando
+            # esattamente le quantità giuste su ogni riga ordine.
+            for r in match_rows:
+                db.session.add(InvoiceVerificationLine(entry_id=entry.id, po_line_id=r["line"].id, qty=r["qty"]))
             db.session.commit()
             flash(f"✅ Three-way match superato. Fattura {entry.doc_number} registrata — "
                   f"{float(gross):.2f} € (imponibile {float(total_net_invoice):.2f} + IVA {float(total_vat):.2f}). "
@@ -326,7 +334,137 @@ def invoice_verification():
 
     return render_template("mm/invoice_verification.html", pos=pos,
                            tolerance=float(PRICE_TOLERANCE_PCT),
-                           cost_centers=CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all())
+                           cost_centers=CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all(),
+                           verified=verified)
+
+
+# ══════════════════════════════════════════════════════════════
+# ELIMINAZIONE (dati di prova) — stesso schema già collaudato per SD:
+# ogni livello blocca da solo se c'è ancora qualcosa collegato sopra,
+# gestendo con cautela eventuali pagamenti fornitore misti.
+# ══════════════════════════════════════════════════════════════
+def _elimina_pagamenti_orfani_mm(entry_ids_da_eliminare):
+    """Stessa logica già corretta e collaudata in blueprints/sd/routes.py,
+    qui per il lato fornitori (KZ invece di DZ)."""
+    installment_ids = [i.id for i in InvoiceInstallment.query.filter(
+        InvoiceInstallment.entry_id.in_(entry_ids_da_eliminare)).all()]
+    payment_entry_ids = set()
+    if installment_ids:
+        for pa in PaymentAllocation.query.filter(PaymentAllocation.installment_id.in_(installment_ids)).all():
+            payment_entry_ids.add(pa.payment_entry_id)
+            db.session.delete(pa)
+    for e in JournalEntry.query.filter(JournalEntry.id.in_(entry_ids_da_eliminare)).all():
+        if e.paid_by_entry_id:
+            payment_entry_ids.add(e.paid_by_entry_id)
+    db.session.flush()
+
+    for peid in payment_entry_ids:
+        ancora_usato = PaymentAllocation.query.filter_by(payment_entry_id=peid).first() is not None
+        ancora_paga_altro = JournalEntry.query.filter(
+            JournalEntry.paid_by_entry_id == peid,
+            ~JournalEntry.id.in_(entry_ids_da_eliminare)
+        ).first() is not None
+        if not ancora_usato and not ancora_paga_altro:
+            # Scollega PRIMA i riferimenti dalle fatture che stiamo per
+            # eliminare — senza questo, Postgres rifiuta la cancellazione
+            # per il vincolo di chiave esterna (lezione imparata da SD).
+            JournalEntry.query.filter(
+                JournalEntry.id.in_(entry_ids_da_eliminare),
+                JournalEntry.paid_by_entry_id == peid
+            ).update({"paid_by_entry_id": None}, synchronize_session=False)
+            db.session.flush()
+            JournalLine.query.filter_by(entry_id=peid).delete(synchronize_session=False)
+            JournalEntry.query.filter_by(id=peid).delete(synchronize_session=False)
+
+
+def _elimina_scrittura_mm(entry_id):
+    """Elimina una scrittura MM (Verifica Fattura o Entrata Merci) e tutto
+    ciò che ne dipende, gestendo con cautela eventuali pagamenti."""
+    entry = JournalEntry.query.get(entry_id)
+    if entry is None:
+        return
+    if entry.is_reversed or entry.reversed_by_id or entry.reverses_id:
+        raise ValueError(
+            f"Il documento {entry.doc_number} è collegato a uno storno — non eliminabile da qui."
+        )
+    _elimina_pagamenti_orfani_mm([entry_id])
+    InvoiceVerificationLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    JournalLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
+    JournalEntry.query.filter_by(id=entry_id).delete(synchronize_session=False)
+
+
+@mm_bp.route("/invoice-verification/<int:entry_id>/elimina", methods=["POST"])
+@login_required
+def invoice_verification_elimina(entry_id):
+    """Elimina una Verifica Fattura — ripristina le quantità fatturate
+    sull'ordine usando InvoiceVerificationLine (traccia esatta di cosa
+    era stato fatturato, riga per riga)."""
+    entry = JournalEntry.query.get_or_404(entry_id)
+    if entry.source_module != "ACQUISTI" or entry.doc_type != "KR":
+        flash("Questa fattura non è stata generata dalla Verifica Fattura MM — non eliminabile da qui.", "danger")
+        return redirect(url_for("mm.invoice_verification"))
+    doc_number = entry.doc_number
+    for r in InvoiceVerificationLine.query.filter_by(entry_id=entry.id).all():
+        r.po_line.qty_invoiced = max(Decimal("0"), Decimal(str(r.po_line.qty_invoiced or 0)) - Decimal(str(r.qty)))
+    try:
+        _elimina_scrittura_mm(entry.id)
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), "danger")
+        return redirect(url_for("mm.invoice_verification"))
+    db.session.commit()
+    flash(f"Verifica Fattura {doc_number} eliminata. Le quantità fatturate sull'ordine sono state ripristinate.", "success")
+    return redirect(url_for("mm.invoice_verification"))
+
+
+@mm_bp.route("/goods-receipts/<int:receipt_id>/elimina", methods=["POST"])
+@login_required
+def goods_receipt_elimina(receipt_id):
+    """Elimina un'Entrata Merci — blocca se una sua riga risulta già
+    fatturata oltre quanto resterebbe ricevuto dopo l'eliminazione."""
+    gr = GoodsReceipt.query.get_or_404(receipt_id)
+    for gr_line in gr.lines:
+        po_line = gr_line.po_line
+        residual_after = Decimal(str(po_line.qty_received or 0)) - Decimal(str(gr_line.qty))
+        if Decimal(str(po_line.qty_invoiced or 0)) > residual_after:
+            flash(f"{po_line.material.code}: già fatturati {float(po_line.qty_invoiced):.0f}, ma dopo "
+                  f"l'eliminazione resterebbero ricevuti solo {float(residual_after):.0f} — elimina prima "
+                  f"la Verifica Fattura collegata.", "danger")
+            return redirect(url_for("mm.goods_receipts"))
+
+    doc_number = gr.doc_number
+    entry_id = gr.journal_entry_id
+    gr.journal_entry_id = None  # scollega PRIMA di eliminare la scrittura (vincolo FK)
+    for gr_line in gr.lines:
+        gr_line.po_line.qty_received = Decimal(str(gr_line.po_line.qty_received or 0)) - Decimal(str(gr_line.qty))
+    db.session.flush()
+    if entry_id:
+        try:
+            _elimina_scrittura_mm(entry_id)
+        except ValueError as e:
+            db.session.rollback()
+            flash(str(e), "danger")
+            return redirect(url_for("mm.goods_receipts"))
+    db.session.delete(gr)  # le righe (GoodsReceiptLine) cascade
+    db.session.commit()
+    flash(f"Entrata Merci {doc_number} eliminata. Le quantità sull'ordine sono state ripristinate.", "success")
+    return redirect(url_for("mm.goods_receipts"))
+
+
+@mm_bp.route("/purchase-orders/<int:po_id>/elimina", methods=["POST"])
+@login_required
+def purchase_order_elimina(po_id):
+    """Elimina un ordine d'acquisto — blocca se ha già Entrate Merci collegate."""
+    po = PurchaseOrder.query.get_or_404(po_id)
+    if po.receipts:
+        flash(f"L'ordine {po.doc_number} ha già Entrate Merci collegate — eliminale prima.", "danger")
+        return redirect(url_for("mm.purchase_orders"))
+    doc_number = po.doc_number
+    db.session.delete(po)  # le righe (PurchaseOrderLine) cascade
+    db.session.commit()
+    flash(f"Ordine d'acquisto {doc_number} eliminato.", "success")
+    return redirect(url_for("mm.purchase_orders"))
+
 
 # ══════════════════════════════════════════════════════════════
 # RFQ — richiesta d'offerta → confronto → flag selezione → OA
