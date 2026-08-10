@@ -6,7 +6,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, AccountMapping, EconomicSubject, JournalEntry, InvoiceLine, InvoiceInstallment
+from models import Account, AccountMapping, CostCenter, EconomicSubject, JournalEntry, InvoiceLine, InvoiceInstallment
 from services.payments import create_installments_for_invoice, allocate_payment, PaymentAllocationError
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.fatturapa import build_fatturapa_xml, FatturaPAConfigError
@@ -72,6 +72,7 @@ def _parse_invoice_lines(form):
     rates = form.getlist("line_vat_rate[]")
     naturas = form.getlist("line_natura[]")
     accounts = form.getlist("line_account_id[]")
+    centers = form.getlist("line_cost_center_id[]")
 
     rows, errors = [], []
     if not (len(descs) == len(nets) == len(rates) == len(naturas) == len(accounts)):
@@ -117,8 +118,14 @@ def _parse_invoice_lines(form):
         except (TypeError, ValueError):
             errors.append(f"Riga {i+1}: seleziona un conto di ricavo attivo.")
             continue
+        cost_center_id = None
+        if i < len(centers) and (centers[i] or "").strip():
+            try:
+                cost_center_id = int(centers[i])
+            except ValueError:
+                cost_center_id = None
         rows.append({"description": desc, "amount": amount, "vat_rate": rate,
-                     "natura": natura, "account_id": account_id})
+                     "natura": natura, "account_id": account_id, "cost_center_id": cost_center_id})
 
     if not rows and not errors:
         errors.append("Inserisci almeno una riga fattura.")
@@ -157,8 +164,9 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
     qualificare il segno del documento, come da prassi del tracciato.
     """
     revenue_accounts = Account.query.filter_by(account_type="ricavo", active=True).order_by(Account.code).all()
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
     ctx = {"customers": customers, "revenue_accounts": revenue_accounts,
-           "natura_codes": NATURA_CODES}
+           "natura_codes": NATURA_CODES, "cost_centers": cost_centers}
     if extra_ctx:
         ctx.update(extra_ctx)
 
@@ -193,7 +201,8 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
             journal_lines = [{"account_id": ar_account.id, "dare": gross, "avere": 0}]
             for r in rows:
                 journal_lines.append({"account_id": r["account_id"], "dare": 0,
-                                      "avere": r["amount"], "description": r["description"]})
+                                      "avere": r["amount"], "description": r["description"],
+                                      "cost_center_id": r.get("cost_center_id")})
             if total_vat:
                 journal_lines.append({"account_id": vat_account.id, "dare": 0, "avere": total_vat})
             doc_label = "Fattura Cliente"
@@ -202,7 +211,8 @@ def _register_ar_document(doc_type, prefix, form, customers, template, extra_ctx
             journal_lines = []
             for r in rows:
                 journal_lines.append({"account_id": r["account_id"], "dare": r["amount"],
-                                      "avere": 0, "description": r["description"]})
+                                      "avere": 0, "description": r["description"],
+                                      "cost_center_id": r.get("cost_center_id")})
             if total_vat:
                 journal_lines.append({"account_id": vat_account.id, "dare": total_vat, "avere": 0})
             journal_lines.append({"account_id": ar_account.id, "dare": 0, "avere": gross})
@@ -254,8 +264,10 @@ def customer_invoice():
         return _register_ar_document("DR", "14", request.form, customers, "ar/customer_invoice.html")
 
     revenue_accounts = Account.query.filter_by(account_type="ricavo", active=True).order_by(Account.code).all()
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
     return render_template("ar/customer_invoice.html", customers=customers,
-                           revenue_accounts=revenue_accounts, natura_codes=NATURA_CODES)
+                           revenue_accounts=revenue_accounts, natura_codes=NATURA_CODES,
+                           cost_centers=cost_centers)
 
 
 @ar_bp.route("/customer_credit_note", methods=["GET", "POST"])
@@ -278,9 +290,10 @@ def customer_credit_note():
                                      extra_ctx={"dr_invoices": dr_invoices})
 
     revenue_accounts = Account.query.filter_by(account_type="ricavo", active=True).order_by(Account.code).all()
+    cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
     return render_template("ar/customer_credit_note.html", customers=customers,
                            revenue_accounts=revenue_accounts, natura_codes=NATURA_CODES,
-                           dr_invoices=dr_invoices)
+                           dr_invoices=dr_invoices, cost_centers=cost_centers)
 
 
 @ar_bp.route("/customer_payment", methods=["GET", "POST"])
