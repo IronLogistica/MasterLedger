@@ -267,7 +267,6 @@ def invoice_verification():
             return redirect(url_for("mm.invoice_verification"))
 
         invoice_ref = request.form.get("invoice_ref", "").strip()
-        cost_center_id = request.form.get("cost_center_id", type=int)
 
         try:
             if not invoice_ref:
@@ -337,7 +336,8 @@ def invoice_verification():
                                        f"prezzo ordine {float(po_price):.4f} € — scostamento "
                                        f"{float(diff_pct):.1f}% oltre tolleranza {float(PRICE_TOLERANCE_PCT):.0f}%.")
                 match_rows.append({"line": l, "qty": qty, "price": price,
-                                   "actual_invoiced": actual_invoiced})
+                                   "actual_invoiced": actual_invoiced,
+                                   "cost_center_id": request.form.get(f"cost_center_id_{l.id}", type=int)})
 
             if not match_rows:
                 raise ValueError("Nessuna quantità da fatturare.")
@@ -347,13 +347,10 @@ def invoice_verification():
                     flash(f"⛔ {b}", "danger")
                 return redirect(url_for("mm.invoice_verification"))
 
-            # Il centro di costo/ricavo serve SOLO se scatta una varianza
-            # prezzo (conto 460000, cost_relevant) — se fattura e ordine
-            # coincidono esattamente, quella riga non nasce e non serve.
-            ha_varianza = any(r["price"] != Decimal(str(r["line"].price)) for r in match_rows)
-            variance_cost_center = None
-            if ha_varianza:
-                _, variance_cost_center = validate_co_assignment(_acc("460000").id, cost_center_id)
+            # Il centro di costo/ricavo serve SOLO per le righe che hanno una
+            # varianza prezzo (conto 460000, cost_relevant) — è per RIGA, non
+            # unico per l'intera Verifica Fattura: due materiali della stessa
+            # fattura possono appartenere a commesse/centri diversi.
 
             # ── Registrazione: Dare EM-RF (al prezzo ORDINE, per chiuderlo esattamente)
             # + Dare/Avere Varianza Prezzo Materiali (differenza vs prezzo FATTURA)
@@ -375,16 +372,18 @@ def invoice_verification():
                                       "description": f"Chiusura EM/RF {l.material.code}"})
 
                 varianza = net_invoice - net_gr
+                if varianza != 0:
+                    _, riga_cost_center = validate_co_assignment(variance_acc.id, r["cost_center_id"])
                 if varianza > 0:
                     journal_lines.append({"account_id": variance_acc.id, "dare": varianza, "avere": 0,
                                           "description": f"Varianza prezzo sfavorevole {l.material.code} "
                                                           f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)",
-                                          "cost_center_id": variance_cost_center.id if variance_cost_center else None})
+                                          "cost_center_id": riga_cost_center.id if riga_cost_center else None})
                 elif varianza < 0:
                     journal_lines.append({"account_id": variance_acc.id, "dare": 0, "avere": -varianza,
                                           "description": f"Varianza prezzo favorevole {l.material.code} "
                                                           f"(fattura {float(r['price']):.4f}€ vs ordine {float(l.price):.4f}€)",
-                                          "cost_center_id": variance_cost_center.id if variance_cost_center else None})
+                                          "cost_center_id": riga_cost_center.id if riga_cost_center else None})
 
                 # Riallinea anche la cache: non propagare un eventuale valore
                 # storico stale nel nuovo totale.
