@@ -38,6 +38,11 @@
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.fatture_da_emettere' }}" href="{{ url_for('sd.fatture_da_emettere') }}">🧮 Fatture da Emettere</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='sd.margini' }}" href="{{ url_for('sd.margini') }}">📊 Margini (Costo del Venduto)</a>
 
+    <div class="sidebar-title">Cruscotti Magazzino (stile MasterLogistic)</div>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='logistics.magazzino' }}" href="{{ url_for('logistics.magazzino') }}">📦 Magazzino / Fabbisogno</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='logistics.ordini_clienti' }}" href="{{ url_for('logistics.ordini_clienti') }}">🧾 Ordini Cliente (cards)</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='logistics.ordini_fornitori' }}" href="{{ url_for('logistics.ordini_fornitori') }}">📥 Ordini Fornitore (cards)</a>
+
     <div class="sidebar-title">Acquisti e Magazzino (AM) — Verifica a Tre Vie</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.rfqs' }}" href="{{ url_for('mm.rfqs') }}">📨 Richieste di preventivo (RFQ)</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='mm.purchase_orders' }}" href="{{ url_for('mm.purchase_orders') }}">📦 Ordini d'acquisto</a>
