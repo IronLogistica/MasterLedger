@@ -43,6 +43,7 @@ def orders():
 def issue(order_id):
     o=ProductionOrder.query.get_or_404(order_id)
     try:
+        if o.status=='completata': raise ValueError(f'Commessa {o.order_number} già completata (versamento PF già eseguito): non si possono registrare altri prelievi. Riapri la commessa prima, se serve correggerla.')
         mat=Material.query.get(request.form.get('material_id',type=int)); qty=_dec(request.form.get('qty'))
         if not mat or qty<=0: raise ValueError('Articolo e quantità positiva sono obbligatori.')
         unit=_dec(request.form.get('unit_cost')) if request.form.get('unit_cost') else Decimal(str(mat.standard_cost))
@@ -60,6 +61,7 @@ def issue(order_id):
 def absorb(order_id):
     o=ProductionOrder.query.get_or_404(order_id)
     try:
+        if o.status=='completata': raise ValueError(f'Commessa {o.order_number} già completata (versamento PF già eseguito): non si possono registrare altri assorbimenti. Riapri la commessa prima, se serve correggerla.')
         typ=request.form.get('cost_type'); amount=_dec(request.form.get('amount'))
         if typ not in ('MOD','OVERHEAD') or amount<=0: raise ValueError('Tipo costo e importo positivo sono obbligatori.')
         wip=_acc('157000'); offset=_acc('472000' if typ=='MOD' else '473000')
@@ -74,6 +76,7 @@ def absorb(order_id):
 def receipt(order_id):
     o=ProductionOrder.query.get_or_404(order_id)
     try:
+        if o.status=='completata': raise ValueError(f'Commessa {o.order_number}: versamento PF già eseguito in precedenza — non si può ripetere (chiuderebbe il WIP una seconda volta, già a zero).')
         qty=_dec(request.form.get('qty_completed'))
         if qty<=0 or qty>Decimal(str(o.qty_planned)): raise ValueError('La quantità versata deve essere positiva e non superiore al pianificato.')
         actual=o.actual_wip
