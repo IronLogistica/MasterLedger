@@ -374,6 +374,82 @@ class WarehouseArea(db.Model):
 
 
 # ══════════════════════════════════════════════════════════════
+# MAGAZZINO INTERNO — ledger movimenti + distinta base (sostituisce
+# l'integrazione in sola lettura verso MasterLogistic-WMS: qui non serve
+# nessun parser perché ordini cliente/fornitore vivono già come righe vere
+# in questo stesso database — SalesOrderLine/PurchaseOrderLine — non come
+# PDF da rileggere). Vedi services/warehouse.py per la logica.
+# ══════════════════════════════════════════════════════════════
+class StockMovement(db.Model):
+    """
+    Riga di ledger di magazzino: OGNI variazione di giacenza — carico da
+    Entrata Merci, scarico da DDT (PGI), prelievo/versamento produzione,
+    rettifica manuale — passa da qui. Material.qty_on_hand resta come
+    CACHE dell'ultimo saldo (per le query veloci nelle liste), ma la
+    fonte di verità per audit e riconciliazione è la somma di questi
+    movimenti — mai un PDF, mai un sistema esterno.
+    """
+    __tablename__ = "stock_movements"
+    id = db.Column(db.Integer, primary_key=True)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
+    warehouse_area_id = db.Column(db.Integer, db.ForeignKey("warehouse_areas.id"), nullable=True)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)          # + carico, - scarico
+    unit_cost = db.Column(db.Numeric(14, 4), nullable=True)     # valorizzazione al momento del movimento
+    movement_type = db.Column(db.String(20), nullable=False)    # delivery|goods_receipt|production_issue|production_receipt|adjustment
+    source_type = db.Column(db.String(30), nullable=True)       # 'delivery_line'|'goods_receipt_line'|'production_order'|'manual'
+    source_id = db.Column(db.Integer, nullable=True)            # id della riga/documento sorgente
+    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    notes = db.Column(db.String(255))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    material = db.relationship("Material")
+    warehouse_area = db.relationship("WarehouseArea")
+
+    @property
+    def total_value(self):
+        if self.unit_cost is None:
+            return None
+        return Decimal(str(self.qty)) * Decimal(str(self.unit_cost))
+
+
+class BillOfMaterial(db.Model):
+    """
+    Distinta base di un articolo padre (HALB o FERT), a versione — sostituisce
+    la DistintaBase piatta di MasterLogistic-WMS con qualcosa di versionabile:
+    ogni modifica ai componenti apre una nuova versione invece di sovrascrivere
+    quella in uso (coerente con come funzionano già i Costi Standard per mese).
+    """
+    __tablename__ = "bill_of_materials"
+    id = db.Column(db.Integer, primary_key=True)
+    parent_material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
+    version = db.Column(db.String(10), nullable=False, default="1")
+    active = db.Column(db.Boolean, default=True)
+    notes = db.Column(db.String(255))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    parent_material = db.relationship("Material", foreign_keys=[parent_material_id])
+    components = db.relationship("BOMComponent", backref="bom", cascade="all, delete-orphan")
+
+    __table_args__ = (db.UniqueConstraint("parent_material_id", "version", name="uq_bom_parent_version"),)
+
+
+class BOMComponent(db.Model):
+    __tablename__ = "bom_components"
+    id = db.Column(db.Integer, primary_key=True)
+    bom_id = db.Column(db.Integer, db.ForeignKey("bill_of_materials.id"), nullable=False)
+    component_material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    qty_per = db.Column(db.Numeric(14, 4), nullable=False)   # quantità componente per 1 unità di padre
+    scrap_pct = db.Column(db.Numeric(5, 2), nullable=False, default=0)  # % scarto fisiologico, applicato in explode_bom
+    notes = db.Column(db.String(255))
+
+    component_material = db.relationship("Material", foreign_keys=[component_material_id])
+
+    __table_args__ = (db.UniqueConstraint("bom_id", "component_material_id", name="uq_bom_component"),)
+
+
+# ══════════════════════════════════════════════════════════════
 # PARAMETRI FISCALI — pannello riservato al Commercialista
 # ══════════════════════════════════════════════════════════════
 class FiscalParameter(db.Model):
@@ -1039,6 +1115,37 @@ class StandardCost(db.Model):
     @property
     def standard_total_unitario(self):
         return (self.standard_material_cost or 0) + (self.standard_labor_cost or 0) + (self.standard_overhead_cost or 0)
+
+
+class ProductCostTarget(db.Model):
+    """Costo obiettivo unitario, versionato per prodotto e data di decorrenza.
+
+    Non sovrascrive mai il target precedente: l'analisi sceglie l'ultima
+    versione valida alla data di fine del periodo, conservando la storia dei
+    budget e rendendo il confronto ripetibile in audit.
+    """
+    __tablename__ = "product_cost_targets"
+    id = db.Column(db.Integer, primary_key=True)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
+    effective_date = db.Column(db.Date, nullable=False, index=True)
+    target_material_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    target_labor_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    target_overhead_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)
+    notes = db.Column(db.String(300))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    material = db.relationship("Material")
+    created_by = db.relationship("User")
+
+    __table_args__ = (
+        db.UniqueConstraint("material_id", "effective_date", name="uq_product_cost_target_material_date"),
+    )
+
+    @property
+    def target_total_unitario(self):
+        return ((self.target_material_cost or 0) + (self.target_labor_cost or 0) +
+                (self.target_overhead_cost or 0))
 
 
 class ProductionOverheadItem(db.Model):
