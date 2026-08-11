@@ -635,24 +635,38 @@ def _as_float(value):
     return float(value) if value is not None else None
 
 
-def _riga_benchmark(label, actual, standard, target):
-    actual, standard = Decimal(str(actual)), Decimal(str(standard))
+def _riga_benchmark(label, actual, actual_comparabile_standard, standard, target):
+    """'actual' è il totale effettivo (mostrato e usato per il confronto target);
+    'actual_comparabile_standard' è il sottoinsieme con standard agganciato,
+    usato SOLO per la varianza vs standard — mai mescolato col totale.
+    None per entrambi = nessuna registrazione comparabile allo standard: la
+    varianza resta esplicitamente non disponibile, mai un finto zero."""
+    actual = Decimal(str(actual))
+    ha_standard = actual_comparabile_standard is not None and standard is not None
+    actual_std = Decimal(str(actual_comparabile_standard)) if ha_standard else None
+    standard_dec = Decimal(str(standard)) if ha_standard else None
     target_value = Decimal(str(target)) if target is not None else None
     return {
         "voce": label, "effettivo": _as_float(money(actual)),
-        "standard": _as_float(money(standard)),
+        "standard": _as_float(money(standard_dec)) if standard_dec is not None else None,
         "target": _as_float(money(target_value)) if target_value is not None else None,
-        "varianza_standard": _as_float(money(variance(actual, standard))),
-        "varianza_standard_pct": _as_float(variance_pct(actual, standard)),
+        "varianza_standard": _as_float(money(variance(actual_std, standard_dec))) if ha_standard else None,
+        "varianza_standard_pct": _as_float(variance_pct(actual_std, standard_dec)) if ha_standard else None,
         "varianza_target": _as_float(money(variance(actual, target_value))) if target_value is not None else None,
         "varianza_target_pct": _as_float(variance_pct(actual, target_value)) if target_value is not None else None,
-        "classificazione_standard": classification(variance(actual, standard)),
+        "classificazione_standard": classification(variance(actual_std, standard_dec)) if ha_standard else None,
         "classificazione_target": classification(variance(actual, target_value)) if target_value is not None else None,
     }
 
 
 def _analisi_costo_prodotto(material, data_da=None, data_a=None):
-    """Build a transparent actual-vs-standard-vs-target report for one SKU."""
+    """Build a transparent actual-vs-standard-vs-target report for one SKU.
+
+    IMPORTANTE: le registrazioni senza uno standard agganciabile pesano nel
+    totale EFFETTIVO (sono spesa vera) ma sono escluse dal confronto standard
+    su ENTRAMBI i lati (effettivo comparabile e standard) — sommare il loro
+    costo reale contro uno standard fittizio a zero gonfierebbe la varianza
+    in modo scorretto. Il totale escluso resta sempre dichiarato esplicitamente."""
     data_da = data_da or date.min
     data_a = data_a or date.today()
     entries = (ProductionEntry.query
@@ -662,8 +676,12 @@ def _analisi_costo_prodotto(material, data_da=None, data_a=None):
                .order_by(ProductionEntry.doc_date, ProductionEntry.id).all())
     limits = []
     actual = {"materiali": Decimal("0"), "manodopera": Decimal("0"), "overhead": Decimal("0")}
+    actual_comparabile = {"materiali": Decimal("0"), "manodopera": Decimal("0"), "overhead": Decimal("0")}
     standard = {"materiali": Decimal("0"), "manodopera": Decimal("0"), "overhead": Decimal("0")}
     qty = Decimal("0")
+    qty_comparabile = Decimal("0")
+    n_senza_standard = 0
+    effettivo_escluso_dal_confronto = Decimal("0")
     detail = []
     for entry in entries:
         quantity = Decimal(str(entry.qty_produced or 0))
@@ -676,7 +694,8 @@ def _analisi_costo_prodotto(material, data_da=None, data_a=None):
         sc = entry.standard_cost or _trova_standard_applicabile(
             entry.material_id, entry.doc_date.year, entry.doc_date.month)
         if sc is None:
-            limits.append(f"Registrazione {entry.doc_number} del {entry.doc_date.strftime('%d/%m/%Y')} senza costo standard: esclusa dal confronto standard.")
+            n_senza_standard += 1
+            effettivo_escluso_dal_confronto += sum(actual_values)
             std_values = (Decimal("0"), Decimal("0"), Decimal("0"))
             standard_available = False
         else:
@@ -684,14 +703,23 @@ def _analisi_costo_prodotto(material, data_da=None, data_a=None):
                           Decimal(str(sc.standard_labor_cost or 0)) * quantity,
                           Decimal(str(sc.standard_overhead_cost or 0)) * quantity)
             standard_available = True
-        for key, value in zip(standard, std_values):
-            standard[key] += value
+            for key, value in zip(actual_comparabile, actual_values):
+                actual_comparabile[key] += value
+            for key, value in zip(standard, std_values):
+                standard[key] += value
+            qty_comparabile += quantity
         detail.append({
             "numero": entry.doc_number, "data": entry.doc_date.isoformat(),
             "quantita": _as_float(quantity), "standard_disponibile": standard_available,
             "effettivo": {"materiali": _as_float(money(actual_values[0])), "manodopera": _as_float(money(actual_values[1])), "overhead": _as_float(money(actual_values[2]))},
             "standard": {"materiali": _as_float(money(std_values[0])), "manodopera": _as_float(money(std_values[1])), "overhead": _as_float(money(std_values[2]))},
         })
+    if n_senza_standard:
+        limits.append(
+            f"{n_senza_standard} registrazione/i su {len(entries)} senza costo standard agganciabile: "
+            f"€ {float(money(effettivo_escluso_dal_confronto)):.2f} di costo effettivo reale sono esclusi "
+            f"dal confronto standard su ENTRAMBI i lati (non solo dallo standard), per non gonfiare la "
+            f"varianza confrontandoli con uno standard fittizio a zero. Restano inclusi nel totale effettivo.")
     if not entries:
         limits.append("Nessuna Produzione Completata nel periodo: non viene inventato alcun costo effettivo.")
     target = _target_applicabile(material.id, data_a)
@@ -703,15 +731,21 @@ def _analisi_costo_prodotto(material, data_da=None, data_a=None):
                          "manodopera": Decimal(str(target.target_labor_cost or 0)) * qty,
                          "overhead": Decimal(str(target.target_overhead_cost or 0)) * qty}
     actual["totale"] = sum(actual.values())
+    actual_comparabile["totale"] = sum(actual_comparabile.values())
     standard["totale"] = sum(standard.values())
     if target_values is not None:
         target_values["totale"] = sum(target_values.values())
     labels = {"materiali": "Materiali", "manodopera": "Manodopera diretta", "overhead": "Overhead", "totale": "TOTALE"}
-    rows = [_riga_benchmark(labels[key], actual[key], standard[key], target_values[key] if target_values else None)
+    ha_confronto_standard = n_senza_standard < len(entries) and entries
+    rows = [_riga_benchmark(
+                labels[key], actual[key],
+                actual_comparabile[key] if ha_confronto_standard else None,
+                standard[key] if ha_confronto_standard else None,
+                target_values[key] if target_values else None)
             for key in ("materiali", "manodopera", "overhead", "totale")]
     unit = None if qty == 0 else {
         "effettivo": _as_float(money(actual["totale"] / qty)),
-        "standard": _as_float(money(standard["totale"] / qty)),
+        "standard": _as_float(money(standard["totale"] / qty_comparabile)) if ha_confronto_standard and qty_comparabile else None,
         "target": _as_float(money(target_values["totale"] / qty)) if target_values else None,
     }
     total_row = rows[-1]
@@ -740,6 +774,9 @@ def analisi_costo_prodotto():
             material = Material.query.get(material_id)
             if material is None:
                 raise ValueError("Articolo non valido.")
+            if ProductCostTarget.query.filter_by(material_id=material_id, effective_date=effective_date).first():
+                raise ValueError(f"Esiste già un costo target per {material.code} con decorrenza "
+                                 f"{effective_date.strftime('%d/%m/%Y')}: scegli un'altra data o modifica quello esistente.")
             target = ProductCostTarget(material_id=material_id, effective_date=effective_date,
                 target_material_cost=Decimal(request.form.get("target_material_cost") or "0"),
                 target_labor_cost=Decimal(request.form.get("target_labor_cost") or "0"),
@@ -747,15 +784,19 @@ def analisi_costo_prodotto():
                 notes=(request.form.get("notes") or "").strip() or None, created_by_id=current_user.id)
             db.session.add(target); db.session.commit()
             flash("Costo target salvato come nuova versione.", "success")
-        except Exception as exc:
+        except ValueError as exc:
             db.session.rollback()
-            flash(f"Impossibile salvare il costo target: {exc}", "error")
+            flash(str(exc), "danger")
+        except Exception:
+            db.session.rollback()
+            flash("Impossibile salvare il costo target: controlla i valori inseriti.", "danger")
         return redirect(url_for("production.analisi_costo_prodotto", material_id=request.form.get("material_id", "")))
     materials = Material.query.filter_by(active=True).order_by(Material.code).all()
     selected_id = request.args.get("material_id", type=int)
     targets = ProductCostTarget.query.order_by(ProductCostTarget.effective_date.desc(), ProductCostTarget.id.desc()).all()
     return render_template("production/analisi_costo_prodotto.html", materials=materials,
                            selected_id=selected_id, targets=targets, today=date.today().isoformat())
+
 
 
 @production_bp.get("/api/analisi-costo-prodotto")
