@@ -75,7 +75,7 @@
       <tbody>
         {% for d in deliveries %}
         <tr>
-          <td class="mono fw-bold">{{ d.doc_number }}{% if not d.stock_verified %} <span title="Registrato senza controllo giacenza reale (MasterLogistic-WMS non collegato al momento)" style="color: var(--ml-orange);">⚠️</span>{% endif %}</td>
+          <td class="mono fw-bold">{{ d.doc_number }}{% if not d.stock_verified %} <span title="Registrato senza controllo giacenza reale (dato storico precedente al magazzino interno)" style="color: var(--ml-orange);">⚠️</span>{% endif %}</td>
           <td>{{ d.doc_date.strftime('%d/%m/%Y') }}</td>
           <td>{{ d.party.name }}</td>
           <td class="mono">{{ d.order.doc_number }}</td>
