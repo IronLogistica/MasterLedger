@@ -31,6 +31,7 @@ from models import (
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
 from services.reversals import reverse_goods_receipt, ReversalError
+from services.warehouse import post_stock_movement, fabbisogni_acquisto, WarehouseError
 from services.mm_invoice_quantities import (
     actual_invoiced_qty, reconcile_invoiced_qty, has_untracked_active_invoice,
     lock_po_lines, has_tracked_active_invoice,
@@ -191,10 +192,17 @@ def goods_receipts():
                                       "description": f"Carico {l.material.code} × {float(qty):.0f}"})
                 total += value
                 db.session.add(GoodsReceiptLine(receipt_id=gr.id, po_line_id=l.id, qty=qty))
-                # NOTA (decisione di Mauri): per ora MasterLedger SOLO LEGGE la
-                # giacenza da MasterLogistic-WMS, non scrive ancora. L'aggiornamento
-                # fisico della giacenza per questo DDT avviene nel processo di
-                # MasterLogistic-WMS stesso (carico da DDT fornitore), non qui.
+                # Carico REALE di magazzino: il ledger interno sostituisce la
+                # sola-lettura da MasterLogistic-WMS. Valorizzato al prezzo
+                # ordine (base del three-way match) — coerente con la scrittura
+                # EM/RF qui sopra, anche se lo standard_cost dell'articolo
+                # potrebbe differire (la differenza si vede in Verifica Fattura).
+                post_stock_movement(
+                    material_id=l.material_id, qty=qty, movement_type="goods_receipt",
+                    source_type="goods_receipt_line", source_id=l.id, unit_cost=l.price,
+                    doc_date=ddt_date, notes=f"Entrata Merci {gr.doc_number}",
+                    created_by_id=current_user.id, allow_negative=True,
+                )
                 l.qty_received = Decimal(str(l.qty_received or 0)) + qty
                 received_any = True
 
@@ -214,7 +222,7 @@ def goods_receipts():
             db.session.commit()
             flash(f"Entrata Merci {gr.doc_number} registrata — carico magazzino "
                   f"{float(total):.2f} € (conto transitorio EM/RF).", "success")
-        except (UnbalancedEntryError, ValueError) as e:
+        except (UnbalancedEntryError, ValueError, WarehouseError) as e:
             db.session.rollback()
             flash(str(e), "danger")
         return redirect(url_for("mm.goods_receipts"))
@@ -587,7 +595,6 @@ def purchase_order_elimina(po_id):
 @login_required
 def rfqs():
     from models import RequestForQuotation, DocumentSequence
-    from services.logistic_client import get_fabbisogni_acquisto, LogisticError
     vendors = EconomicSubject.query.filter_by(active=True, is_supplier=True).order_by(EconomicSubject.name).all()
     materials = Material.query.filter_by(active=True).order_by(Material.code).all()
     if request.method == 'POST':
@@ -604,10 +611,7 @@ def rfqs():
             db.session.rollback(); flash(str(e),'danger')
         return redirect(url_for('mm.rfqs'))
     wms_error = None
-    try:
-        wms_needs = get_fabbisogni_acquisto()
-    except LogisticError as exc:
-        wms_needs, wms_error = [], str(exc)
+    wms_needs = fabbisogni_acquisto()
     material_by_code = {m.code.strip().upper(): m for m in materials}
     for row in wms_needs:
         row['material'] = material_by_code.get(str(row['sku']).strip().upper())
@@ -639,7 +643,6 @@ def rfq_elimina(rfq_id):
 def rfq_from_wms_needs():
     """Crea RFQ dai fabbisogni correnti WMS e le inoltra ai fornitori selezionati."""
     from models import RequestForQuotation, RfqDelivery, DocumentSequence
-    from services.logistic_client import get_fabbisogni_acquisto, LogisticError
     from services.rfq_delivery import send_rfq_email, RfqDeliveryError
     vendor_ids = request.form.getlist('vendor_ids', type=int)
     requested = request.form.getlist('sku')
@@ -651,10 +654,7 @@ def rfq_from_wms_needs():
     vendors = EconomicSubject.query.filter(EconomicSubject.id.in_(vendor_ids), EconomicSubject.active.is_(True), EconomicSubject.is_supplier.is_(True)).all()
     if not vendors:
         flash('I fornitori selezionati non sono validi.', 'danger'); return redirect(url_for('mm.rfqs'))
-    try:
-        current = {str(x['sku']): x for x in get_fabbisogni_acquisto()}
-    except LogisticError as exc:
-        flash(str(exc), 'danger'); return redirect(url_for('mm.rfqs'))
+    current = {str(x['sku']): x for x in fabbisogni_acquisto()}
     materials = {m.code.strip().upper(): m for m in Material.query.filter_by(active=True).all()}
     created, sent, failed, skipped = [], 0, [], []
     try:
