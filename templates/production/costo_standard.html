@@ -27,10 +27,15 @@
         <div class="form-group"><label>Mese (1-12) <span class="req">*</span></label><input type="number" name="month" min="1" max="12" required></div>
       </div>
       <div class="form-grid" style="margin-top:8px;">
-        <div class="form-group"><label>Costo standard Materiali (€/unità)</label><input type="number" step="0.0001" name="standard_material_cost" placeholder="0,0000"></div>
-        <div class="form-group"><label>Costo standard Manodopera (€/unità)</label><input type="number" step="0.0001" name="standard_labor_cost" placeholder="0,0000"></div>
-        <div class="form-group"><label>Costo standard Overhead (€/unità)</label><input type="number" step="0.0001" name="standard_overhead_cost" placeholder="0,0000"></div>
+        <div class="form-group"><label>Costo standard Materiali (€/unità)</label><input type="number" step="0.0001" name="standard_material_cost" id="standard_material_cost" placeholder="0,0000"></div>
+        <div class="form-group"><label>Costo standard Manodopera (€/unità)</label><input type="number" step="0.0001" name="standard_labor_cost" id="standard_labor_cost" placeholder="0,0000"></div>
+        <div class="form-group"><label>Costo standard Overhead (€/unità)</label><input type="number" step="0.0001" name="standard_overhead_cost" id="standard_overhead_cost" placeholder="0,0000"></div>
       </div>
+      <div class="form-group" style="margin-top:8px; display:flex; gap:6px; align-items:flex-end;">
+        <div style="flex:1;"><label>Mese di riferimento per le tariffe di overhead</label><input type="month" id="mese_costo_pieno"></div>
+        <button type="button" class="btn btn-ghost" onclick="calcolaCostoPieno()">📐⚙️ Da BOM + Routing (metodo SAP)</button>
+      </div>
+      <div id="costo-pieno-esito" style="margin-top:6px; font-size:12px;"></div>
       <div class="form-group" style="margin-top:8px;"><label>Note</label><input type="text" name="notes" placeholder="es. base di calcolo usata"></div>
       <div class="btn-row"><button class="btn btn-primary" type="submit">Fissa Costo Standard</button></div>
     </form>
@@ -64,4 +69,49 @@
     {% else %}<div class="empty-state">Nessuno standard fissato ancora.</div>{% endif %}
   </div>
 </div>
+
+<script>
+async function calcolaCostoPieno() {
+  const materialSel = document.querySelector('select[name="material_id"]');
+  const mese = document.getElementById('mese_costo_pieno').value;
+  const esito = document.getElementById('costo-pieno-esito');
+
+  if (!materialSel.value) { esito.innerHTML = '<span style="color:var(--ml-red);">Seleziona prima il prodotto finito.</span>'; return; }
+  if (!mese) { esito.innerHTML = '<span style="color:var(--ml-red);">Seleziona il mese di riferimento (per le tariffe di overhead).</span>'; return; }
+
+  esito.innerHTML = '⏳ Esplodo BOM e Ciclo di Lavorazione...';
+  try {
+    const resp = await fetch(`/produzione/calcola-costo-pieno?material_id=${materialSel.value}&mese=${mese}`);
+    const data = await resp.json();
+    if (!resp.ok) {
+      esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ ${data.error}</span>`;
+      return;
+    }
+    document.getElementById('standard_material_cost').value = data.costo_materiali.toFixed(4);
+    document.getElementById('standard_labor_cost').value = data.costo_manodopera.toFixed(4);
+    document.getElementById('standard_overhead_cost').value = data.costo_overhead.toFixed(4);
+
+    let righeMat = data.dettaglio_materiali.map(d =>
+      `${d.codice} (${d.descrizione}): ${d.quantita_necessaria.toFixed(3)} × ` +
+      (d.costo_unitario !== null ? `€${d.costo_unitario.toFixed(4)} = €${d.costo_totale.toFixed(2)}` : '<em>costo sconosciuto</em>')
+    ).join('<br>');
+    let righeRouting = data.dettaglio_routing.map(d =>
+      `Fase ${d.seq} — ${d.centro} (${d.descrizione}): ${d.minuti_macchina.toFixed(1)}min macchina + ${d.minuti_manodopera.toFixed(1)}min manodopera → ` +
+      `manodopera €${d.costo_manodopera.toFixed(4)} (tariffa €${d.tariffa_oraria_manodopera.toFixed(2)}/h), ` +
+      `overhead €${d.costo_overhead.toFixed(4)} (tariffa €${d.tariffa_oraria_overhead.toFixed(2)}/h)`
+    ).join('<br>');
+
+    let msg = `<span style="color:var(--ml-green);">✅ Costo pieno unitario: €${data.costo_pieno_unitario.toFixed(4)} ` +
+      `(materiali €${data.costo_materiali.toFixed(4)} + manodopera €${data.costo_manodopera.toFixed(4)} + overhead €${data.costo_overhead.toFixed(4)})</span>`;
+    if (righeMat) msg += `<br><strong>Distinta base:</strong><br>${righeMat}`;
+    if (righeRouting) msg += `<br><strong>Ciclo di lavorazione:</strong><br>${righeRouting}`;
+    if (data.avvisi && data.avvisi.length) {
+      msg += '<br>' + data.avvisi.map(a => `<span style="color:#b8860b;">⚠️ ${a}</span>`).join('<br>');
+    }
+    esito.innerHTML = msg;
+  } catch (e) {
+    esito.innerHTML = `<span style="color:var(--ml-red);">⚠️ Errore di rete: ${e}</span>`;
+  }
+}
+</script>
 {% endblock %}

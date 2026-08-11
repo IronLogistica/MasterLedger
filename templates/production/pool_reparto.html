@@ -17,7 +17,16 @@
         <div class="form-group"><label>Mese (1-12) <span class="req">*</span></label><input type="number" name="month" min="1" max="12" required></div>
         <div class="form-group"><label>Descrizione voce <span class="req">*</span></label><input type="text" name="description" required placeholder="es. Ammortamento macchina taglio"></div>
         <div class="form-group"><label>Importo (€) <span class="req">*</span></label><input type="number" step="0.01" name="amount" required></div>
+        <div class="form-group">
+          <label>Centro di lavoro</label>
+          <select name="work_center_id"><option value="">— non ripartito —</option>
+            {% for c in centri %}<option value="{{ c.id }}">{{ c.code }} — {{ c.description }}</option>{% endfor %}
+          </select>
+        </div>
       </div>
+      <div class="theory-note">Assegnare la voce a un centro di lavoro la fa entrare nel calcolo della sua tariffa
+        oraria di overhead (metodo SAP: pool del centro / capacità pianificata) usata dal Ciclo di Lavorazione. Le
+        voci lasciate "non ripartite" restano fuori da quel calcolo.</div>
       <div class="btn-row"><button class="btn btn-primary" type="submit">Aggiungi Voce</button></div>
     </form>
   </div>
@@ -30,11 +39,12 @@
       {% for (anno, mese), dati in gruppi.items()|sort(reverse=true) %}
       <h4 style="margin:14px 0 6px;">{{ '%02d'|format(mese) }}/{{ anno }} — Totale pool: <strong>{{ '%.2f'|format(dati.totale) }} €</strong></h4>
       <table class="masterledger-table" style="margin-bottom:10px;">
-        <thead><tr><th>Descrizione</th><th class="td-num" style="width:140px;">Importo €</th><th style="width:60px;"></th></tr></thead>
+        <thead><tr><th>Descrizione</th><th>Centro di lavoro</th><th class="td-num" style="width:140px;">Importo €</th><th style="width:60px;"></th></tr></thead>
         <tbody>
           {% for v in dati.voci %}
           <tr>
             <td>{{ v.description }}</td>
+            <td>{{ v.work_center.code if v.work_center else '— non ripartito —' }}</td>
             <td class="td-num">{{ '%.2f'|format(v.amount) }}</td>
             <td>
               <form method="POST" action="{{ url_for('production.elimina_voce_pool', voce_id=v.id) }}" onsubmit="return confirm('Eliminare questa voce?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
