@@ -29,9 +29,11 @@ from flask_login import login_required, current_user
 
 from extensions import db
 from models import (Account, Material, ProductionEntry, DocumentSequence, Delivery, DeliveryLine,
-                     ProductionOverheadItem, OverheadAdjustment, JournalEntry, JournalLine, StandardCost)
+                     ProductionOverheadItem, OverheadAdjustment, JournalEntry, JournalLine, StandardCost,
+                     ProductCostTarget)
 from services.posting import post_journal_entry, UnbalancedEntryError
-from services.logistic_client import get_bom, sposta_stock, LogisticError
+from services.warehouse import bom_components, post_stock_movement, WarehouseError
+from services.product_cost import money, variance, variance_pct, classification
 
 production_bp = Blueprint("production", __name__, template_folder="../../templates/production")
 
@@ -46,29 +48,28 @@ def _acc(code):
 
 def _calcola_materie_prime_da_bom(material, qty_produced):
     """
-    Legge la distinta base di 'material' da MasterLogistic-WMS e calcola il
-    costo delle materie prime necessarie per produrre qty_produced unità,
-    valorizzando ogni componente al suo standard_cost SU MASTERLEDGER (la
-    distinta base dà le QUANTITÀ, il costo lo sappiamo solo qui).
+    Legge la distinta base di 'material' dal magazzino interno (BillOfMaterial)
+    e calcola il costo delle materie prime necessarie per produrre qty_produced
+    unità, valorizzando ogni componente al suo standard_cost.
 
     Ritorna (totale_costo: Decimal, dettaglio: list[dict]). Se un componente
-    della BOM non esiste come Material in MasterLedger, viene segnalato nel
+    della BOM non ha un costo standard valorizzato, viene segnalato nel
     dettaglio con costo_unitario=None invece di essere ignorato in silenzio.
     """
-    figli = get_bom(material.code)
+    figli = bom_components(material.id)
     dettaglio = []
     totale = Decimal("0")
     for f in figli:
-        codice = f["codice_figlio"]
-        qty_necessaria = Decimal(str(f["quantita"])) * qty_produced
-        componente = Material.query.filter_by(code=codice).first()
-        costo_unitario = Decimal(str(componente.standard_cost)) if componente else None
+        componente = f.component_material
+        qty_necessaria = Decimal(str(f.qty_per)) * qty_produced * (Decimal("1") + Decimal(str(f.scrap_pct or 0)) / 100)
+        costo_unitario = Decimal(str(componente.standard_cost)) if componente and componente.standard_cost else None
         costo_totale = (qty_necessaria * costo_unitario) if costo_unitario is not None else None
         if costo_totale is not None:
             totale += costo_totale
         dettaglio.append({
-            "codice": codice,
-            "descrizione": f.get("desc_figlio") or "",
+            "codice": componente.code if componente else "?",
+            "material_id": f.component_material_id,
+            "descrizione": componente.description if componente else "",
             "quantita_necessaria": float(qty_necessaria),
             "costo_unitario": float(costo_unitario) if costo_unitario is not None else None,
             "costo_totale": float(costo_totale) if costo_totale is not None else None,
@@ -81,9 +82,8 @@ def _calcola_materie_prime_da_bom(material, qty_produced):
 def calcola_materie_prime():
     """
     Endpoint AJAX: dato un prodotto finito e una quantità, calcola il costo
-    delle materie prime dalla distinta base di MasterLogistic-WMS. Usato dal
-    pulsante "Calcola da distinta base" nel form — NON scrive nulla, è solo
-    un'anteprima.
+    delle materie prime dalla distinta base interna. Usato dal pulsante
+    "Calcola da distinta base" nel form — NON scrive nulla, è solo un'anteprima.
     """
     material_id = request.args.get("material_id", type=int)
     qty = request.args.get("qty", type=float) or 0
@@ -93,19 +93,16 @@ def calcola_materie_prime():
     if qty <= 0:
         return jsonify({"error": "Inserisci prima la quantità prodotta."}), 400
 
-    try:
-        totale, dettaglio = _calcola_materie_prime_da_bom(material, Decimal(str(qty)))
-    except LogisticError as e:
-        return jsonify({"error": str(e)}), 400
+    totale, dettaglio = _calcola_materie_prime_da_bom(material, Decimal(str(qty)))
 
     if not dettaglio:
-        return jsonify({"error": f"Nessuna distinta base trovata su MasterLogistic-WMS per {material.code}."}), 400
+        return jsonify({"error": f"Nessuna distinta base trovata per {material.code} — creala in Distinta Base."}), 400
 
     mancanti = [d["codice"] for d in dettaglio if d["costo_unitario"] is None]
     return jsonify({
         "totale": float(totale),
         "dettaglio": dettaglio,
-        "avviso": (f"Componenti non trovati come Material in MasterLedger (costo ignorato): "
+        "avviso": (f"Componenti senza costo standard valorizzato (costo ignorato): "
                    f"{', '.join(mancanti)}") if mancanti else None,
     })
 
@@ -620,6 +617,171 @@ def margine():
                            costo_primo_totale_mese=float(costo_primo_totale_mese))
 
 
+# ══════════════════════════════════════════════════════════════
+# ANALISI COSTO PRODOTTO / COSTO TARGET / VARIANZE
+# I consuntivi provengono esclusivamente da ProductionEntry: nessun dato viene
+# stimato. Gli standard sono quelli agganciati alla registrazione, o (per le
+# registrazioni legacy) lo standard applicabile alla data della registrazione.
+# ══════════════════════════════════════════════════════════════
+def _target_applicabile(material_id, reference_date):
+    return (ProductCostTarget.query
+            .filter(ProductCostTarget.material_id == material_id,
+                    ProductCostTarget.effective_date <= reference_date)
+            .order_by(ProductCostTarget.effective_date.desc(), ProductCostTarget.id.desc())
+            .first())
+
+
+def _as_float(value):
+    return float(value) if value is not None else None
+
+
+def _riga_benchmark(label, actual, standard, target):
+    actual, standard = Decimal(str(actual)), Decimal(str(standard))
+    target_value = Decimal(str(target)) if target is not None else None
+    return {
+        "voce": label, "effettivo": _as_float(money(actual)),
+        "standard": _as_float(money(standard)),
+        "target": _as_float(money(target_value)) if target_value is not None else None,
+        "varianza_standard": _as_float(money(variance(actual, standard))),
+        "varianza_standard_pct": _as_float(variance_pct(actual, standard)),
+        "varianza_target": _as_float(money(variance(actual, target_value))) if target_value is not None else None,
+        "varianza_target_pct": _as_float(variance_pct(actual, target_value)) if target_value is not None else None,
+        "classificazione_standard": classification(variance(actual, standard)),
+        "classificazione_target": classification(variance(actual, target_value)) if target_value is not None else None,
+    }
+
+
+def _analisi_costo_prodotto(material, data_da=None, data_a=None):
+    """Build a transparent actual-vs-standard-vs-target report for one SKU."""
+    data_da = data_da or date.min
+    data_a = data_a or date.today()
+    entries = (ProductionEntry.query
+               .filter(ProductionEntry.material_id == material.id,
+                       ProductionEntry.doc_date >= data_da,
+                       ProductionEntry.doc_date <= data_a)
+               .order_by(ProductionEntry.doc_date, ProductionEntry.id).all())
+    limits = []
+    actual = {"materiali": Decimal("0"), "manodopera": Decimal("0"), "overhead": Decimal("0")}
+    standard = {"materiali": Decimal("0"), "manodopera": Decimal("0"), "overhead": Decimal("0")}
+    qty = Decimal("0")
+    detail = []
+    for entry in entries:
+        quantity = Decimal(str(entry.qty_produced or 0))
+        qty += quantity
+        actual_values = (Decimal(str(entry.raw_material_cost or 0)),
+                         Decimal(str(entry.direct_labor_cost or 0)),
+                         Decimal(str(entry.overhead_cost or 0)))
+        for key, value in zip(actual, actual_values):
+            actual[key] += value
+        sc = entry.standard_cost or _trova_standard_applicabile(
+            entry.material_id, entry.doc_date.year, entry.doc_date.month)
+        if sc is None:
+            limits.append(f"Registrazione {entry.doc_number} del {entry.doc_date.strftime('%d/%m/%Y')} senza costo standard: esclusa dal confronto standard.")
+            std_values = (Decimal("0"), Decimal("0"), Decimal("0"))
+            standard_available = False
+        else:
+            std_values = (Decimal(str(sc.standard_material_cost or 0)) * quantity,
+                          Decimal(str(sc.standard_labor_cost or 0)) * quantity,
+                          Decimal(str(sc.standard_overhead_cost or 0)) * quantity)
+            standard_available = True
+        for key, value in zip(standard, std_values):
+            standard[key] += value
+        detail.append({
+            "numero": entry.doc_number, "data": entry.doc_date.isoformat(),
+            "quantita": _as_float(quantity), "standard_disponibile": standard_available,
+            "effettivo": {"materiali": _as_float(money(actual_values[0])), "manodopera": _as_float(money(actual_values[1])), "overhead": _as_float(money(actual_values[2]))},
+            "standard": {"materiali": _as_float(money(std_values[0])), "manodopera": _as_float(money(std_values[1])), "overhead": _as_float(money(std_values[2]))},
+        })
+    if not entries:
+        limits.append("Nessuna Produzione Completata nel periodo: non viene inventato alcun costo effettivo.")
+    target = _target_applicabile(material.id, data_a)
+    target_values = None
+    if target is None:
+        limits.append("Nessun costo target valido alla fine del periodo selezionato: il confronto target non è disponibile.")
+    else:
+        target_values = {"materiali": Decimal(str(target.target_material_cost or 0)) * qty,
+                         "manodopera": Decimal(str(target.target_labor_cost or 0)) * qty,
+                         "overhead": Decimal(str(target.target_overhead_cost or 0)) * qty}
+    actual["totale"] = sum(actual.values())
+    standard["totale"] = sum(standard.values())
+    if target_values is not None:
+        target_values["totale"] = sum(target_values.values())
+    labels = {"materiali": "Materiali", "manodopera": "Manodopera diretta", "overhead": "Overhead", "totale": "TOTALE"}
+    rows = [_riga_benchmark(labels[key], actual[key], standard[key], target_values[key] if target_values else None)
+            for key in ("materiali", "manodopera", "overhead", "totale")]
+    unit = None if qty == 0 else {
+        "effettivo": _as_float(money(actual["totale"] / qty)),
+        "standard": _as_float(money(standard["totale"] / qty)),
+        "target": _as_float(money(target_values["totale"] / qty)) if target_values else None,
+    }
+    total_row = rows[-1]
+    summary = []
+    if qty:
+        summary.append(f"Prodotte {float(qty):g} unità: costo effettivo unitario € {unit['effettivo']:.2f}.")
+    if total_row["varianza_standard"] is not None:
+        summary.append(f"Varianza vs standard: {'+' if total_row['varianza_standard'] > 0 else ''}€ {total_row['varianza_standard']:.2f} ({total_row['classificazione_standard']}).")
+    if total_row["varianza_target"] is not None:
+        summary.append(f"Varianza vs target: {'+' if total_row['varianza_target'] > 0 else ''}€ {total_row['varianza_target']:.2f} ({total_row['classificazione_target']}).")
+    return {"ok": True, "materiale": {"id": material.id, "codice": material.code, "descrizione": material.description},
+            "periodo": {"da": data_da.isoformat() if data_da != date.min else None, "a": data_a.isoformat()},
+            "quantita_prodotta": _as_float(qty), "righe": rows, "costo_unitario": unit,
+            "target": ({"id": target.id, "decorrenza": target.effective_date.isoformat(),
+                        "note": target.notes or ""} if target else None),
+            "registrazioni": detail, "limiti": limits, "riepilogo": summary}
+
+
+@production_bp.route("/analisi-costo-prodotto", methods=["GET", "POST"])
+@login_required
+def analisi_costo_prodotto():
+    if request.method == "POST":
+        try:
+            material_id = int(request.form.get("material_id", ""))
+            effective_date = datetime.strptime(request.form.get("effective_date", ""), "%Y-%m-%d").date()
+            material = Material.query.get(material_id)
+            if material is None:
+                raise ValueError("Articolo non valido.")
+            target = ProductCostTarget(material_id=material_id, effective_date=effective_date,
+                target_material_cost=Decimal(request.form.get("target_material_cost") or "0"),
+                target_labor_cost=Decimal(request.form.get("target_labor_cost") or "0"),
+                target_overhead_cost=Decimal(request.form.get("target_overhead_cost") or "0"),
+                notes=(request.form.get("notes") or "").strip() or None, created_by_id=current_user.id)
+            db.session.add(target); db.session.commit()
+            flash("Costo target salvato come nuova versione.", "success")
+        except Exception as exc:
+            db.session.rollback()
+            flash(f"Impossibile salvare il costo target: {exc}", "error")
+        return redirect(url_for("production.analisi_costo_prodotto", material_id=request.form.get("material_id", "")))
+    materials = Material.query.filter_by(active=True).order_by(Material.code).all()
+    selected_id = request.args.get("material_id", type=int)
+    targets = ProductCostTarget.query.order_by(ProductCostTarget.effective_date.desc(), ProductCostTarget.id.desc()).all()
+    return render_template("production/analisi_costo_prodotto.html", materials=materials,
+                           selected_id=selected_id, targets=targets, today=date.today().isoformat())
+
+
+@production_bp.get("/api/analisi-costo-prodotto")
+@login_required
+def api_analisi_costo_prodotto():
+    material_id = request.args.get("material_id", type=int)
+    material = Material.query.get(material_id)
+    if material is None:
+        return jsonify(ok=False, error="Seleziona un articolo valido."), 400
+    def parse_date(name):
+        raw = (request.args.get(name) or "").strip()
+        if not raw:
+            return None
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError(f"Data {name} non valida (usa AAAA-MM-GG).")
+    try:
+        start, end = parse_date("da"), parse_date("a")
+        if start and end and start > end:
+            raise ValueError("La data iniziale non può essere successiva alla data finale.")
+        return jsonify(_analisi_costo_prodotto(material, start, end))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+
+
 @production_bp.route("/completata", methods=["GET", "POST"])
 @login_required
 def completata():
@@ -679,13 +841,16 @@ def completata():
                 _, dettaglio_bom = _calcola_materie_prime_da_bom(material, qty_produced)
                 componenti_da_scaricare = [d for d in dettaglio_bom if d["quantita_necessaria"] > 0]
 
-            # ── ECCEZIONE DECISA CON MAURI (produzione non ha nessun'altra via
-            # per arrivare a MasterLogistic-WMS, a differenza di acquisti/
-            # consegne che passano dal caricamento DDT su MasterLogistic
-            # stesso): carichiamo il prodotto finito PRIMA di scrivere la
-            # contabilità — se MasterLogistic non è raggiungibile, blocchiamo
-            # tutto invece di salvare una scrittura senza il carico fisico. ──
-            sposta_stock(material.code, float(qty_produced))
+            # ── Carico del prodotto finito: il magazzino è interno, quindi
+            # questo passaggio non dipende più da un sistema esterno
+            # raggiungibile o meno — è la stessa transazione DB di tutto
+            # il resto (contabilità inclusa nello stesso commit più sotto).
+            post_stock_movement(
+                material_id=material.id, qty=qty_produced, movement_type="production_receipt",
+                source_type="production_entry", source_id=None,
+                unit_cost=(totale_cogm / qty_produced).quantize(Decimal("0.0001")),
+                notes="Produzione completata", created_by_id=current_user.id,
+            )
 
             journal_lines = []
             variance_materiali = Decimal("0")
@@ -777,35 +942,35 @@ def completata():
             )
             db.session.add(pe)
 
-            # Scarico componenti da BOM: "best effort" — se uno fallisce lo
-            # segnaliamo, ma non blocchiamo tutto (il carico FERT e la
-            # contabilità sono già a posto a questo punto).
-            componenti_non_scaricati = []
+            # Scarico componenti da BOM: stessa transazione di tutto il resto
+            # (magazzino interno, non più un sistema esterno da richiamare in
+            # "best effort") — se un componente non basta, blocca l'intera
+            # registrazione invece di lasciare un carico FERT senza scarico.
             for comp in componenti_da_scaricare:
-                try:
-                    sposta_stock(comp["codice"], -comp["quantita_necessaria"])
-                except LogisticError as e:
-                    componenti_non_scaricati.append(f'{comp["codice"]}: {e}')
+                post_stock_movement(
+                    material_id=comp["material_id"], qty=-Decimal(str(comp["quantita_necessaria"])),
+                    movement_type="production_issue", source_type="production_entry", source_id=None,
+                    unit_cost=comp.get("costo_unitario"), notes=f"Produzione completata {material.code}",
+                    created_by_id=current_user.id,
+                )
 
             db.session.commit()
             msg = (f"Produzione registrata: {entry.doc_number} — "
                    f"€ {float(totale_cogm):.2f} capitalizzati a magazzino Prodotti Finiti "
-                   f"(caricati {float(qty_produced):.0f} {material.code} su MasterLogistic-WMS).")
-            if usa_bom and not componenti_non_scaricati:
+                   f"(caricati {float(qty_produced):.0f} {material.code}).")
+            if usa_bom:
                 msg += " Componenti scaricati da distinta base."
-            elif not usa_bom and raw_cost > 0:
+            elif raw_cost > 0:
                 msg += (" ATTENZIONE: materie prime inserite a mano — la giacenza delle "
-                        "materie prime su MasterLogistic-WMS NON è stata aggiornata.")
-            flash(msg, "success" if not componenti_non_scaricati else "warning")
-            if componenti_non_scaricati:
-                flash("Componenti non scaricati (verificare a mano su MasterLogistic-WMS): "
-                      + "; ".join(componenti_non_scaricati), "warning")
+                        "materie prime NON è stata scaricata (usa \"Calcola da distinta base\" "
+                        "per scaricarla automaticamente).")
+            flash(msg, "success")
             return redirect(url_for("production.completata"))
 
         except UnbalancedEntryError as e:
             db.session.rollback()
             flash(str(e), "danger")
-        except (ValueError, LogisticError) as e:
+        except (ValueError, WarehouseError) as e:
             db.session.rollback()
             flash(str(e), "danger")
 
