@@ -8,7 +8,7 @@
       Alla ricezione del DDT registra subito
       <span class="mono">Dare Magazzino / Avere 165000 Ricevimenti da fatturare (EM/RF)</span>
       al <strong>prezzo ordine</strong>. IVA e debito fornitore nasceranno solo con la MIRO.<br>
-      Questa operazione aggiorna la contabilità e il ricevuto sull'OA; la giacenza fisica resta gestita da MasterLogistic-WMS.
+      Questa operazione aggiorna la contabilità, il ricevuto sull'OA e carica davvero la giacenza nel magazzino interno.
     </div>
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid" style="margin-bottom:12px;">
