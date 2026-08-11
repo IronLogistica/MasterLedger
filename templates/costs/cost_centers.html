@@ -3,7 +3,7 @@
 <div class="card">
   <div class="card-header"><span>🏷️</span> Centri di Costo <span class="tx-code">Centri di costo</span></div>
   <div class="card-body">
-    <form method="POST" action="{{ url_for('costs.cost_center_new') }}" style="margin-bottom:18px;">
+    <form method="POST" action="{{ url_for('costs.cost_center_new') }}" style="margin-bottom:18px;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group"><label>Codice</label><input type="text" name="code" placeholder="es. CC-LOG-01" required></div>
         <div class="form-group"><label>Nome</label><input type="text" name="name" placeholder="es. Logistica" required></div>
