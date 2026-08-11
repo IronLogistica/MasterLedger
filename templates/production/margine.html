@@ -19,6 +19,8 @@
       </div>
     </form>
 
+    {% if avviso_mix %}<div class="alert alert-warning" style="margin-bottom:14px;">⚠️ {{ avviso_mix }}</div>{% endif %}
+
     <div class="theory-note" style="margin-bottom:14px;">
       <strong>Overhead generale del mese: {{ '%.2f'|format(livello2.totale) }} €</strong><br>
       = Costi totali a conto economico ({{ '%.2f'|format(livello2.costi_totali_ge) }} €)
