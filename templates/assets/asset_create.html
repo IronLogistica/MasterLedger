@@ -6,7 +6,7 @@
     <div class="info-box">
       Crea l'anagrafica cespite e lo capitalizza in un'unica operazione. Genera: <strong>Dare</strong> Cespiti + IVA a Credito, <strong>Avere</strong> Debiti v/Fornitori.
     </div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group" style="grid-column: span 2;">
           <label>Descrizione <span class="req">*</span></label>

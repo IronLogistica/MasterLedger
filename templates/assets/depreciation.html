@@ -4,7 +4,7 @@
   <div class="card-header"><span>📉</span> Ammortamenti — Ammortamento Periodico <span class="tx-code">Ammortamenti</span></div>
   <div class="card-body">
     <div class="info-box">Calcola e registra l'ammortamento del periodo su tutti i cespiti attivi ({{ assets|length }} cespiti). Genera: <strong>Dare</strong> Ammortamenti, <strong>Avere</strong> Fondo Ammortamento.</div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group"><label>Periodo (mese)</label><input type="number" name="period" min="1" max="12" value="{{ 1 }}"></div>
         <div class="form-group"><label>Esercizio</label><input type="number" name="year" value="2026"></div>
