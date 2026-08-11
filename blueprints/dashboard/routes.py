@@ -102,7 +102,7 @@ def config_fiscale():
 PLACEHOLDER_VALUES = {"01234567890"}
 
 TEST_CEDENTE_VALUES = {
-    "fe_denominazione": "IRON SEGNALETICA (AMBIENTE TEST)",
+    "fe_denominazione": "IRON APPALTI (AMBIENTE TEST)",
     "fe_piva": "12345678903",
     "fe_codice_fiscale": "12345678903",
     "fe_regime_fiscale": "RF01",
