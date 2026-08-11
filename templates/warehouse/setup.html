@@ -20,7 +20,7 @@
         <tr>
           <td class="mono">{{ p.code }}</td><td>{{ p.name }}</td><td>{{ p.city }}</td><td>{{ p.region }}</td><td class="mono">{{ p.company_code }}</td>
           <td>
-            <form method="POST" action="{{ url_for('warehouse.site_delete', site_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa sede operativa?');">
+            <form method="POST" action="{{ url_for('warehouse.site_delete', site_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa sede operativa?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
             </form>
           </td>
@@ -30,7 +30,7 @@
         {% endfor %}
       </tbody>
     </table>
-    <form method="POST" action="{{ url_for('warehouse.site_new') }}">
+    <form method="POST" action="{{ url_for('warehouse.site_new') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group"><label>Codice sede operativa <span class="req">*</span></label><input type="text" name="code" maxlength="4" placeholder="es. 2000" required></div>
         <div class="form-group"><label>Nome</label><input type="text" name="name" placeholder="es. Stabilimento Bergamo"></div>
@@ -52,7 +52,7 @@
             <td>{{ s.area_type_label }}</td>
             <td class="mono">{{ (s.account.code + ' — ' + s.account.name) if s.account else 'nessuno (transito)' }}</td>
             <td>
-              <form method="POST" action="{{ url_for('warehouse.area_delete', sloc_id=s.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa ubicazione?');">
+              <form method="POST" action="{{ url_for('warehouse.area_delete', sloc_id=s.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa ubicazione?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
               </form>
             </td>
@@ -61,7 +61,7 @@
         {% endfor %}
       </tbody>
     </table>
-    <form method="POST" action="{{ url_for('warehouse.area_new') }}">
+    <form method="POST" action="{{ url_for('warehouse.area_new') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Sede operativa <span class="req">*</span></label>
