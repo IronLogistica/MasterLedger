@@ -22,10 +22,16 @@
     </div>
 
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if not materiali_finiti %}
+      <div class="alert alert-warning" style="margin-bottom:14px;">
+        ⚠️ Nessun Prodotto Finito (FERT) attivo trovato — il modulo qui sotto non può funzionare senza.
+        <a href="{{ url_for('materials.material_list') }}">Crealo prima in Anagrafica Articoli →</a>
+      </div>
+      {% endif %}
       <div class="form-grid">
         <div class="form-group">
           <label>Prodotto Finito <span class="req">*</span></label>
-          <select name="material_id" required>
+          <select name="material_id" required {{ 'disabled' if not materiali_finiti }}>
             <option value="">—</option>
             {% for m in materiali_finiti %}
             <option value="{{ m.id }}">{{ m.code }} — {{ m.description }}</option>
