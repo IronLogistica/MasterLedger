@@ -167,27 +167,32 @@ def _derive_invoice_amounts(entry):
     """
     Ricostruisce imponibile/IVA/aliquota dalle righe di Prima Nota generate
     da Fattura cliente (vedi blueprints/ar/routes.py): Avere sul conto Ricavi = netto,
-    Avere sul conto 170000 (IVA a Debito) = imposta.
+    Avere sul conto 170000 (IVA a Debito) = imposta. Solo fallback per
+    documenti legacy senza InvoiceLine — vedi sotto, dove il percorso
+    principale (multi-riga) ricalcola tutto in Decimal dalle righe vere.
+    Decimal fin da qui (non float): stessa cautela già documentata in
+    _money() sopra, per non rischiare un centesimo di scostamento sulla
+    soglia di arrotondamento.
     """
-    net = 0.0
-    vat = 0.0
+    net = Decimal("0")
+    vat = Decimal("0")
     for line in entry.lines:
         acc = line.account
         if acc is None:
             continue
         if acc.account_type == "ricavo":
-            net += float(line.avere or 0)
+            net += Decimal(str(line.avere or 0))
         elif acc.code == "170000":
-            vat += float(line.avere or 0)
+            vat += Decimal(str(line.avere or 0))
 
     if entry.vat_rate is not None:
-        vat_rate = float(entry.vat_rate)
+        vat_rate = Decimal(str(entry.vat_rate))
     elif net:
-        vat_rate = round(vat / net * 100, 2)
+        vat_rate = (vat / net * 100).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     else:
-        vat_rate = 0.0
+        vat_rate = Decimal("0")
 
-    gross = float(entry.gross_amount) if entry.gross_amount is not None else (net + vat)
+    gross = Decimal(str(entry.gross_amount)) if entry.gross_amount is not None else (net + vat)
     return net, vat, vat_rate, gross
 
 
