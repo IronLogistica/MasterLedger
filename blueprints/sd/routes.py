@@ -31,6 +31,7 @@ from services.posting import post_journal_entry, UnbalancedEntryError, _reverse_
 from services.co import validate_co_assignment, COValidationError
 from services.reversals import reverse_delivery, ReversalError
 from services.warehouse import current_stock, post_stock_movement, WarehouseError
+from services.payments import create_installments_for_invoice
 
 sd_bp = Blueprint("sd", __name__, template_folder="../../templates/sd")
 
@@ -225,9 +226,23 @@ def delivery_elimina(delivery_id):
             flash(str(e), "danger")
             return redirect(url_for("sd.deliveries"))
     for dl_line in d.lines:
-        so_line = SalesOrderLine.query.filter_by(order_id=d.order_id, material_id=dl_line.material_id).first()
+        # Riferimento diretto se presente (righe create dopo l'introduzione di
+        # sales_order_line_id — vedi services/reversals.py, stesso fix), altrimenti
+        # fallback per material_id sui DDT storici.
+        if dl_line.sales_order_line_id is not None:
+            so_line = SalesOrderLine.query.get(dl_line.sales_order_line_id)
+        else:
+            so_line = SalesOrderLine.query.filter_by(order_id=d.order_id, material_id=dl_line.material_id).first()
         if so_line is not None:
             so_line.qty_delivered = max(Decimal("0"), Decimal(str(so_line.qty_delivered or 0)) - Decimal(str(dl_line.qty)))
+        # La merce spedita da questo DDT torna in magazzino: senza questo,
+        # eliminare un DDT (pulizia dati di prova) lascia la giacenza
+        # scaricata per sempre, anche se il documento non esiste più.
+        post_stock_movement(
+            material_id=dl_line.material_id, qty=Decimal(str(dl_line.qty)), movement_type="adjustment",
+            source_type="delivery_elimina", source_id=d.id, unit_cost=dl_line.unit_cost,
+            notes=f"Eliminazione DDT {doc_number}", created_by_id=current_user.id,
+        )
     # Le righe (DeliveryLine) sono già eliminate in automatico dal cascade
     # della relationship — qui basta il delete dell'aggregato.
     db.session.delete(d)
@@ -722,6 +737,12 @@ def billing():
             for n, (desc, net, rate) in enumerate(inv_rows, start=1):
                 db.session.add(InvoiceLine(entry_id=entry.id, line_number=n, description=desc,
                                            amount=net, vat_rate=rate, account_id=rev_acc.id))
+            # Come ogni altra fattura cliente (ar.customer_invoice): senza
+            # questa chiamata la fattura non compare mai nello Scadenzario —
+            # _elimina_scrittura_sd qui sopra ripulisce già InvoiceInstallment,
+            # segno che la creazione era l'unico pezzo mancante (stesso bug
+            # già trovato e corretto sul lato MM).
+            create_installments_for_invoice(entry)
             d.billing_entry_id = entry.id
             db.session.commit()
             flash(f"Fattura {entry.doc_number} creata da DDT {d.doc_number} — "
