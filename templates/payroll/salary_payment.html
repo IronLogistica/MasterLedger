@@ -5,7 +5,7 @@
   <div class="card-body">
     <div class="info-box">Seleziona gli accantonamenti buste paga (competenza) non ancora pagati. Genera: <strong>Dare</strong> Debiti v/Dipendenti c/Retribuzioni, <strong>Avere</strong> Banca c/c.</div>
     {% if open_rows %}
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <table class="masterledger-table">
         <thead><tr><th></th><th>Documento</th><th>Data</th><th>Descrizione</th><th class="td-num">Netto da pagare</th></tr></thead>
         <tbody>

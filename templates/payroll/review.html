@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}Revisione paghe{% endblock %}{% block content %}<h1>Revisione {{row.document_kind}}</h1><form method="post">
+{% extends 'base.html' %}{% block title %}Revisione paghe{% endblock %}{% block content %}<h1>Revisione {{row.document_kind}}</h1><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {% if row.document_kind in ('PAYSLIP','RATEI') %}
 <p>Periodo: <b>{{data.period}}</b>. Ogni riparto deve totalizzare esattamente <b>100,00%</b>; l'ultimo centesimo è assegnato all'ultima riga. Il mapping storico a un solo centro resta 100% compatibile.</p>
 {% if row.document_kind=='PAYSLIP' %}<div class="card"><b>Trattenute</b>: la quota INPS dipendente (dentro le trattenute totali) va a Debiti INPS, il resto (IRPEF e altre ritenute) va a Debiti ritenute erariali — così il pagamento F24 (sezione INPS vs sezione Erario) chiude esattamente i due conti separati, senza residui. Gli <b>oneri sociali a carico azienda</b> sono un costo aggiuntivo mai presente nel lordo busta: se diverso da zero vengono registrati come costo con contropartita Debiti INPS.</div>{% endif %}
