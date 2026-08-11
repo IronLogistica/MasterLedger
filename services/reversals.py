@@ -119,9 +119,18 @@ def reverse_delivery(delivery_id, reason, created_by_id=None):
     try:
         new_entry = _reverse_gl_only(delivery.cogs_entry, created_by_id=created_by_id)
         for dl_line in delivery.lines:
-            so_line = SalesOrderLine.query.filter_by(
-                order_id=delivery.order_id, material_id=dl_line.material_id
-            ).first()
+            # Riferimento diretto alla riga ordine (righe DDT create da qui in
+            # poi) — mai ambiguo anche se lo stesso articolo compare su più
+            # righe dello stesso ordine. Per DDT storici senza il riferimento
+            # (creati prima di questo campo), fallback per material_id: resta
+            # ambiguo SOLO se l'ordine ha davvero più righe con lo stesso
+            # articolo, caso raro ma possibile — se ne dichiara il limite.
+            if dl_line.sales_order_line_id is not None:
+                so_line = SalesOrderLine.query.get(dl_line.sales_order_line_id)
+            else:
+                so_line = SalesOrderLine.query.filter_by(
+                    order_id=delivery.order_id, material_id=dl_line.material_id
+                ).first()
             if so_line is not None:
                 so_line.qty_delivered -= dl_line.qty
             # Contro-movimento: la merce spedita rientra in magazzino (lo
