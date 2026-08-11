@@ -413,6 +413,75 @@ class StockMovement(db.Model):
         return Decimal(str(self.qty)) * Decimal(str(self.unit_cost))
 
 
+class WorkCenter(db.Model):
+    """
+    Centro di lavoro (reparto fisico: taglio, foratura, assemblaggio,
+    confezionamento) — l'oggetto su cui si accumula il pool di overhead
+    (ProductionOverheadItem, tramite work_center_id) e attraverso cui il
+    Ciclo di Lavorazione (Routing) assorbe manodopera diretta + overhead nel
+    costo standard, sostituendo per gli articoli che hanno un ciclo attivo la
+    quota-fatturato approssimata di _calcola_overhead_da_fatturato.
+
+    hourly_rate_labor: tariffa oraria manodopera diretta, inserita a mano
+    (costo orario pieno dell'operatore, es. comprensivo di TFR/contributi) —
+    non calcolata dal pool, perché la manodopera diretta non è un costo
+    indiretto di reparto.
+
+    capacity_hours_month: ore pianificate/mese del centro, denominatore per
+    calcolare la tariffa oraria di overhead = pool del centro nel mese /
+    capacity_hours_month (metodo SAP del centro di lavoro).
+    """
+    __tablename__ = "work_centers"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(20), unique=True, nullable=False)
+    description = db.Column(db.String(120), nullable=False)
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=True)
+    capacity_hours_month = db.Column(db.Numeric(10, 2), nullable=False, default=0)
+    hourly_rate_labor = db.Column(db.Numeric(10, 4), nullable=False, default=0)
+    active = db.Column(db.Boolean, default=True)
+
+    cost_center = db.relationship("CostCenter")
+
+
+class Routing(db.Model):
+    """
+    Ciclo di lavorazione di un articolo padre (HALB o FERT), a versione —
+    stesso principio di versionamento di BillOfMaterial: ogni modifica alle
+    fasi apre una nuova versione invece di sovrascrivere quella in uso.
+    """
+    __tablename__ = "routings"
+    id = db.Column(db.Integer, primary_key=True)
+    parent_material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
+    version = db.Column(db.String(10), nullable=False, default="1")
+    active = db.Column(db.Boolean, default=True)
+    notes = db.Column(db.String(255))
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    parent_material = db.relationship("Material", foreign_keys=[parent_material_id])
+    operations = db.relationship("RoutingOperation", backref="routing", cascade="all, delete-orphan",
+                                 order_by="RoutingOperation.seq")
+
+    __table_args__ = (db.UniqueConstraint("parent_material_id", "version", name="uq_routing_parent_version"),)
+
+
+class RoutingOperation(db.Model):
+    """Fase del ciclo: tempo standard macchina/manodopera per 1 unità del
+    padre, presso un centro di lavoro. seq in stile SAP (10, 20, 30...)."""
+    __tablename__ = "routing_operations"
+    id = db.Column(db.Integer, primary_key=True)
+    routing_id = db.Column(db.Integer, db.ForeignKey("routings.id"), nullable=False)
+    seq = db.Column(db.Integer, nullable=False, default=10)
+    work_center_id = db.Column(db.Integer, db.ForeignKey("work_centers.id"), nullable=False)
+    description = db.Column(db.String(200))
+    machine_time_min = db.Column(db.Numeric(10, 4), nullable=False, default=0)
+    labor_time_min = db.Column(db.Numeric(10, 4), nullable=False, default=0)
+
+    work_center = db.relationship("WorkCenter")
+
+    __table_args__ = (db.UniqueConstraint("routing_id", "seq", name="uq_routing_operation_seq"),)
+
+
 class BillOfMaterial(db.Model):
     """
     Distinta base di un articolo padre (HALB o FERT), a versione — sostituisce
@@ -1171,8 +1240,15 @@ class ProductionOverheadItem(db.Model):
     month = db.Column(db.Integer, nullable=False)   # 1-12
     description = db.Column(db.String(200), nullable=False)
     amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    # Centro di lavoro a cui è assegnata la voce — nullable per compatibilità
+    # con le voci storiche inserite prima del metodo SAP (routing_cost.py):
+    # quelle restano nel pool "non ripartito" e NON entrano nel calcolo
+    # tariffa oraria di nessun centro finché non vengono riassegnate.
+    work_center_id = db.Column(db.Integer, db.ForeignKey("work_centers.id"), nullable=True, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    work_center = db.relationship("WorkCenter")
 
 
 class OverheadAdjustment(db.Model):
