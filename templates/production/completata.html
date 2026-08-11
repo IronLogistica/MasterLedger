@@ -124,7 +124,7 @@ async function calcolaDaBOM() {
   if (!materialSel.value) { esito.innerHTML = '<span style="color:var(--ml-red);">Seleziona prima il prodotto finito.</span>'; return; }
   if (!qtyInput.value || parseFloat(qtyInput.value) <= 0) { esito.innerHTML = '<span style="color:var(--ml-red);">Inserisci prima la quantità prodotta.</span>'; return; }
 
-  esito.innerHTML = '⏳ Leggo la distinta base da MasterLogistic-WMS...';
+  esito.innerHTML = '⏳ Leggo la distinta base interna...';
   try {
     const resp = await fetch(`/produzione/calcola-materie-prime?material_id=${materialSel.value}&qty=${qtyInput.value}`);
     const data = await resp.json();
@@ -139,7 +139,7 @@ async function calcolaDaBOM() {
       `${d.codice} (${d.descrizione}): ${d.quantita_necessaria.toFixed(2)} × ` +
       (d.costo_unitario !== null ? `€${d.costo_unitario.toFixed(2)} = €${d.costo_totale.toFixed(2)}` : '<em>costo sconosciuto</em>')
     ).join('<br>');
-    let msg = `<span style="color:var(--ml-green);">✅ Calcolato da distinta base (quando registri, i componenti verranno scaricati davvero su MasterLogistic-WMS):</span><br>${righe}`;
+    let msg = `<span style="color:var(--ml-green);">✅ Calcolato da distinta base (quando registri, i componenti verranno scaricati davvero dal magazzino interno):</span><br>${righe}`;
     if (data.avviso) msg += `<br><span style="color:#b8860b;">⚠️ ${data.avviso}</span>`;
     esito.innerHTML = msg;
   } catch (e) {
