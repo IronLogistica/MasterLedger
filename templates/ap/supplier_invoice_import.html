@@ -13,7 +13,7 @@
       <br><small>Nota: la firma dei file .p7m non viene verificata (quello lo fa già lo SdI/intermediario) —
       viene solo letto il contenuto.</small>
     </div>
-    <form method="POST" enctype="multipart/form-data">
+    <form method="POST" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group">
         <label>File fattura elettronica <span class="req">*</span></label>
         <input type="file" name="xml_file" accept=".xml,.p7m" required>
@@ -43,7 +43,7 @@
       </tbody>
     </table>
 
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="phase" value="confirm">
       <input type="hidden" name="cedente_piva" value="{{ parsed.cedente_piva }}">
       <input type="hidden" name="cedente_denominazione" value="{{ parsed.cedente_denominazione }}">

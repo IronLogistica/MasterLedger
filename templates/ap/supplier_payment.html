@@ -5,7 +5,7 @@
   <div class="card-body">
     <div class="info-box">Seleziona le fatture aperte da compensare. Genera: <strong>Dare</strong> Debiti v/Fornitori, <strong>Avere</strong> Banca c/c.</div>
     {% if open_invoices %}
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <table class="masterledger-table">
         <thead><tr><th></th><th>Documento</th><th>Fornitore</th><th>Data</th><th class="td-num">Importo</th></tr></thead>
         <tbody>

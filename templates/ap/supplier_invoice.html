@@ -9,7 +9,7 @@
       diversi, aggiungi una riga per ciascuno — ogni riga spesa sul SUO conto e SUO centro, non serve dividerla
       in più fatture.
     </div>
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Fornitore <span class="req">*</span></label>
