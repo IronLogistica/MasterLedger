@@ -1,5 +1,5 @@
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
@@ -18,6 +18,21 @@ def _get_account_by_code(code):
     if acc is None:
         raise ValueError(f"Conto {code} non trovato nel Piano dei Conti. Esegui 'flask seed' prima di continuare.")
     return acc
+
+
+def _residuo_fattura(inv):
+    """Residuo REALE da pagare per questo documento — MAI il lordo originale
+    a occhi chiusi: se la fattura è già stata parzialmente saldata dallo
+    Scadenzario granulare (/gl/scadenzario/paga), le rate hanno un residuo
+    inferiore al lordo. Usare gross_amount qui pagherebbe/incasserebbe di
+    nuovo la parte già chiusa. Nessuna rata trovata (dato legacy, mai
+    passato da create_installments_for_invoice) → il lordo resta corretto,
+    perché equivale a "mai stato toccato".
+    """
+    installments = InvoiceInstallment.query.filter_by(entry_id=inv.id).all()
+    if not installments:
+        return Decimal(str(inv.gross_amount or 0))
+    return sum((Decimal(str(i.residual_amount or 0)) for i in installments), Decimal("0"))
 
 
 @ap_bp.route("/supplier_invoice", methods=["GET", "POST"])
@@ -59,18 +74,19 @@ def supplier_invoice():
                 net_str = (nets[i] if i < len(nets) else "").strip()
                 if not net_str:
                     continue  # riga vuota nel form, si ignora
-                net = float(net_str)
+                net = Decimal(net_str.replace(",", ".")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 if net <= 0:
                     raise ValueError(f"Riga {i+1}: l'imponibile deve essere positivo.")
-                rate = float(rates[i]) if i < len(rates) and rates[i] else 22.0
+                rate = Decimal(rates[i].replace(",", ".")) if i < len(rates) and rates[i] else Decimal("22.0")
                 account_id = int(accounts_ids[i]) if i < len(accounts_ids) and accounts_ids[i] else None
                 center_id = int(centers_ids[i]) if i < len(centers_ids) and centers_ids[i] else None
                 if not account_id:
                     raise ValueError(f"Riga {i+1}: seleziona un conto di costo.")
                 expense_account, cost_center = validate_co_assignment(account_id, center_id)
+                vat = (net * rate / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 rows.append({
                     "description": (descs[i] if i < len(descs) else "").strip(),
-                    "net": net, "vat": round(net * rate / 100, 2),
+                    "net": net, "vat": vat,
                     "account_id": expense_account.id,
                     "cost_center_id": cost_center.id if cost_center else None,
                 })
@@ -78,8 +94,8 @@ def supplier_invoice():
             if not rows:
                 raise ValueError("Inserisci almeno una riga con conto di costo e importo.")
 
-            total_net = sum(r["net"] for r in rows)
-            total_vat = sum(r["vat"] for r in rows)
+            total_net = sum((r["net"] for r in rows), Decimal("0"))
+            total_vat = sum((r["vat"] for r in rows), Decimal("0"))
             gross = total_net + total_vat
 
             lines = [{"account_id": r["account_id"], "dare": r["net"], "avere": 0,
@@ -267,7 +283,7 @@ def supplier_payment():
 
             ap_account = AccountMapping.get_or_error("debiti_fornitori")
             bank_account = AccountMapping.get_or_error("banca_principale")
-            total = sum((Decimal(str(inv.gross_amount or 0)) for inv in invoices), Decimal("0"))
+            total = sum((_residuo_fattura(inv) for inv in invoices), Decimal("0"))
             if total <= 0:
                 raise ValueError("Il netto da pagare, dopo le note di credito, deve essere positivo.")
             refs = [inv.doc_number for inv in invoices]
