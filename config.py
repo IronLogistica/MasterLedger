@@ -26,7 +26,7 @@ class Config:
 
     # Nome Codice azienda / Cliente — configurabile per riutilizzare l'app con più clienti
     COMPANY_CODE = os.environ.get("COMPANY_CODE", "1000")
-    COMPANY_NAME = os.environ.get("COMPANY_NAME", "IRON SEGNALETICA")
+    COMPANY_NAME = os.environ.get("COMPANY_NAME", "IRON APPALTI")
 
     PERMANENT_SESSION_LIFETIME = timedelta(hours=8)
     REMEMBER_COOKIE_DURATION = timedelta(hours=8)
