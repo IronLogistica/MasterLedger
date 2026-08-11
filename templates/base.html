@@ -50,10 +50,12 @@
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.pool_reparto' }}" href="{{ url_for('production.pool_reparto') }}">🧾 Pool Overhead Reparto</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.rettifiche' }}" href="{{ url_for('production.rettifiche') }}">📐 Rettifiche Overhead Generale</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='production.margine' }}" href="{{ url_for('production.margine') }}">📈 Costo Pieno / Margine</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint in ['production.analisi_costo_prodotto', 'production.api_analisi_costo_prodotto'] }}" href="{{ url_for('production.analisi_costo_prodotto') }}">📊 Analisi Costo / Target / Varianze</a>
 
     <div class="sidebar-title">Anagrafiche</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='parties.party_list' }}" href="{{ url_for('parties.party_list') }}">🤝 Soggetti Economici</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='materials.material_list' }}" href="{{ url_for('materials.material_list') }}">🏷️ Articoli</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint in ('materials.bom_list','materials.bom_esplosione') }}" href="{{ url_for('materials.bom_list') }}">🧩 Distinta Base</a>
 
     <div class="sidebar-title">Ciclo Fornitore (AP)</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_invoice' }}" href="{{ url_for('ap.supplier_invoice') }}">📥 Fatture fornitore</a>
@@ -103,5 +105,6 @@
   {% block guest_content %}{% endblock %}
 {% endif %}
 
+  {% block scripts %}{% endblock %}
 </body>
 </html>
