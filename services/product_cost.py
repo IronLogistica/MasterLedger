@@ -1,8 +1,10 @@
-"""Pure calculation helpers for product cost / target / variance reporting.
+"""services/product_cost.py — funzioni di calcolo pure per l'analisi costo
+prodotto / target / varianze.
 
-Positive variances are unfavourable (actual cost above benchmark), negative
-variances favourable.  Keeping these formulas independent from Flask/SQLAlchemy
-makes the accounting conventions directly testable.
+Varianza positiva = sfavorevole (costo effettivo sopra il riferimento),
+negativa = favorevole — stessa convenzione dei segni usata in tutto il resto
+di MasterLedger (payroll, produzione). Tenere queste formule indipendenti da
+Flask/SQLAlchemy le rende testabili direttamente, senza app né database.
 """
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -10,7 +12,7 @@ ZERO = Decimal("0")
 
 
 def dec(value):
-    """Convert an input to Decimal without binary floating point artefacts."""
+    """Converte un valore in Decimal senza artefatti di virgola mobile binaria."""
     return ZERO if value is None else Decimal(str(value))
 
 
@@ -24,16 +26,22 @@ def safe_div(numerator, denominator):
 
 
 def variance(actual, benchmark):
-    """Actual minus benchmark; + means unfavourable."""
+    """Effettivo meno riferimento; positivo = sfavorevole."""
+    if actual is None or benchmark is None:
+        return None
     return dec(actual) - dec(benchmark)
 
 
 def variance_pct(actual, benchmark):
+    if actual is None or benchmark is None:
+        return None
     ratio = safe_div(variance(actual, benchmark) * 100, benchmark)
     return None if ratio is None else ratio.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def classification(value):
+    if value is None:
+        return None
     value = dec(value)
     if abs(value) < Decimal("0.005"):
         return "nulla"
