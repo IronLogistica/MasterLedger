@@ -204,6 +204,27 @@ def _calcola_overhead_da_fatturato(material, mese_riferimento, peso_fatturato_pc
 
     peso_fatt = Decimal(str(peso_fatturato_pct)) / 100
     peso_cp = 1 - peso_fatt
+    avviso_rinormalizzazione = None
+    # Se una delle due basi del mix non ha dati per questo mese, il suo peso
+    # non può restare "silenzioso": senza rinormalizzare, la somma delle
+    # quote sui prodotti non arriverebbe mai al 100% del pool (una parte del
+    # costo indiretto sparirebbe senza essere assegnata a nessuno).
+    if fatturato_totale <= 0 and costo_primo_totale > 0 and peso_fatt > 0:
+        avviso_rinormalizzazione = (
+            f"Nessun fatturato nel mese per gli articoli di carpenteria propria: il mix richiesto "
+            f"({peso_fatturato_pct:.0f}% fatturato / {100 - peso_fatturato_pct:.0f}% costo primo) è stato "
+            f"rinormalizzato al 100% costo primo, altrimenti la quota-fatturato (senza base) sarebbe "
+            f"rimasta non assegnata a nessun prodotto."
+        )
+        peso_fatt, peso_cp = Decimal("0"), Decimal("1")
+    elif costo_primo_totale <= 0 and fatturato_totale > 0 and peso_cp > 0:
+        avviso_rinormalizzazione = (
+            f"Nessun costo primo calcolabile nel mese per gli articoli di carpenteria propria: il mix "
+            f"richiesto ({peso_fatturato_pct:.0f}% fatturato / {100 - peso_fatturato_pct:.0f}% costo primo) "
+            f"è stato rinormalizzato al 100% fatturato, altrimenti la quota-costo-primo (senza base) "
+            f"sarebbe rimasta non assegnata a nessun prodotto."
+        )
+        peso_fatt, peso_cp = Decimal("1"), Decimal("0")
 
     dettaglio = []
     for r in righe:
@@ -239,7 +260,7 @@ def _calcola_overhead_da_fatturato(material, mese_riferimento, peso_fatturato_pc
     riga_materiale = next((d for d in dettaglio if d["codice"] == material.code), None)
     quota_pct_materiale = Decimal(str(riga_materiale["quota_pct"])) if riga_materiale else Decimal("0")
     quota = pool_totale * (quota_pct_materiale / 100)
-    return quota, dettaglio, pool_totale, None
+    return quota, dettaglio, pool_totale, avviso_rinormalizzazione
 
 
 @production_bp.route("/calcola-overhead")
@@ -530,7 +551,6 @@ def margine():
     peso_fatturato = max(0, min(100, peso_fatturato))
     peso_fatt = Decimal(str(peso_fatturato)) / 100
     peso_cp = 1 - peso_fatt
-
     primo_giorno = date(anno, mese_num, 1)
     ultimo_giorno = date(anno, mese_num, calendar.monthrange(anno, mese_num)[1])
 
@@ -554,6 +574,19 @@ def margine():
     fatturato_totale_mese = sum((Decimal(str(r.fatturato or 0)) for r in righe_vendute), Decimal("0"))
     costo_primo_map = _costo_primo_mensile_per_materiale(primo_giorno)
     costo_primo_totale_mese = sum((costo_primo_map.get(r.id, Decimal("0")) for r in righe_vendute), Decimal("0"))
+    # Stessa rinormalizzazione di _calcola_overhead_da_fatturato: se una delle
+    # due basi del mix è a zero questo mese, il suo peso non può restare
+    # silenzioso — altrimenti la quota di overhead generale spalmata sui
+    # prodotti non arriva mai al 100% del pool (Livello 2).
+    avviso_mix = None
+    if fatturato_totale_mese <= 0 and costo_primo_totale_mese > 0 and peso_fatt > 0:
+        avviso_mix = ("Nessun fatturato nel mese: il mix richiesto è stato rinormalizzato "
+                     "al 100% costo primo.")
+        peso_fatt, peso_cp = Decimal("0"), Decimal("1")
+    elif costo_primo_totale_mese <= 0 and fatturato_totale_mese > 0 and peso_cp > 0:
+        avviso_mix = ("Nessun costo primo calcolabile nel mese: il mix richiesto è stato "
+                     "rinormalizzato al 100% fatturato.")
+        peso_fatt, peso_cp = Decimal("1"), Decimal("0")
 
     # COGM del mese per i prodotti effettivamente fabbricati (Livello 1 già incluso)
     produzioni_mese = (
@@ -614,7 +647,7 @@ def margine():
     righe.sort(key=lambda x: x["fatturato"], reverse=True)
     return render_template("production/margine.html", righe=righe, mese=mese, peso_fatturato=peso_fatturato,
                            livello2=livello2, fatturato_totale_mese=float(fatturato_totale_mese),
-                           costo_primo_totale_mese=float(costo_primo_totale_mese))
+                           costo_primo_totale_mese=float(costo_primo_totale_mese), avviso_mix=avviso_mix)
 
 
 # ══════════════════════════════════════════════════════════════
