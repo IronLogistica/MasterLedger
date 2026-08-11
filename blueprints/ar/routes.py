@@ -13,6 +13,22 @@ from services.fatturapa import build_fatturapa_xml, FatturaPAConfigError
 
 ar_bp = Blueprint("ar", __name__, template_folder="../../templates/ar")
 
+
+def _residuo_fattura(inv):
+    """Residuo REALE da incassare per questo documento — MAI il lordo
+    originale a occhi chiusi: se la fattura è già stata parzialmente
+    incassata dallo Scadenzario granulare (/gl/scadenzario/paga), le rate
+    hanno un residuo inferiore al lordo. Usare gross_amount qui
+    incasserebbe di nuovo la parte già chiusa. Nessuna rata trovata (nota
+    di credito DG, o dato legacy) → il lordo resta corretto, perché
+    equivale a "mai stato toccato".
+    """
+    installments = InvoiceInstallment.query.filter_by(entry_id=inv.id).all()
+    if not installments:
+        return Decimal(str(inv.gross_amount or 0))
+    return sum((Decimal(str(i.residual_amount or 0)) for i in installments), Decimal("0"))
+
+
 # Codici Natura ammessi dal tracciato FatturaPA (tipo NaturaType dell'XSD
 # ufficiale, Allegato A vers. 1.9). I codici generici N2, N3 e N6 non sono
 # più validi dal 2021: vanno usate le sotto-codifiche.
@@ -330,7 +346,7 @@ def customer_payment():
             ar_account = AccountMapping.get_or_error("crediti_clienti")
             bank_account = AccountMapping.get_or_error("banca_principale")
             total = sum(((Decimal("-1") if inv.doc_type == "DG" else Decimal("1")) *
-                         Decimal(str(inv.gross_amount or 0)) for inv in invoices), Decimal("0"))
+                         _residuo_fattura(inv) for inv in invoices), Decimal("0"))
             if total <= 0:
                 raise ValueError("Il totale da incassare deve essere positivo.")
             refs = [inv.doc_number for inv in invoices]
