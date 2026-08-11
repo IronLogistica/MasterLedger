@@ -186,10 +186,10 @@ def ambiente_test():
     db.session.commit()
     for a in azioni:
         flash(a, "success")
-    flash("AMBIENTE TEST PRONTO. Percorso consigliato per il collaudo XML (non tocca il magazzino WMS): "
+    flash("AMBIENTE TEST PRONTO. Percorso consigliato per il collaudo XML: "
           "Ciclo Cliente → Fattura cliente → seleziona CLIENTE TEST SRL, una riga "
           "'Cartello di prova SEGN-TEST', imponibile 250, IVA 22 → registra → dal dettaglio scarica l'XML → "
           "caricalo su 'fatturapa.gov.it → Controlla la Fattura'. In alternativa la catena Preventivo→DDT→Fattura "
-          "funziona solo se SEGN-TEST ha giacenza su MasterLogistic-WMS. "
+          "funziona anch'essa: SEGN-TEST ha giacenza abbondante nel magazzino interno. "
           "NON firmare né trasmettere: è un file di collaudo.", "warning")
     return redirect(url_for("dashboard.config_fiscale"))
