@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Ordini Fornitore — Cards{% endblock %}
+{% block content %}
+<style>
+  .ml-topbar { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .ml-filtri { display:flex; gap:5px; flex-wrap:wrap; }
+  .ml-filtro-btn { background:#1a1a1a; border:1px solid #333; color:#888; padding:4px 10px; border-radius:12px; font-size:0.72rem; font-weight:bold; cursor:pointer; }
+  .ml-filtro-btn.active { background:var(--ml-orange); color:#10151d; border-color:var(--ml-orange); }
+  .ml-filtro-btn.f-daconf.active   { background:rgba(255,140,0,0.15); border-color:#ff8c00; color:#ff8c00; }
+  .ml-filtro-btn.f-conf.active     { background:rgba(40,167,69,0.15); border-color:#28a745; color:#28a745; }
+  .ml-filtro-btn.f-arrivo.active   { background:rgba(0,210,255,0.15); border-color:#00d2ff; color:#00d2ff; }
+  .ml-filtro-btn.f-ritirare.active { background:rgba(255,193,7,0.2); border-color:#ffc107; color:#ffc107; }
+  .ml-filtro-btn.f-evasi.active    { background:rgba(100,220,100,0.15); border-color:#64dc64; color:#64dc64; }
+  .ml-search { background:#111; border:1px solid #333; color:#fff; padding:6px 12px; border-radius:8px; font-size:0.85rem; width:200px; }
+  .ml-search:focus { outline:none; border-color:var(--ml-orange); }
+
+  .ml-card-grid { display:flex; flex-wrap:wrap; gap:15px; }
+  .ml-mini-card {
+    position:relative; background:#141414; border:1px solid #2a2a2a; border-left:4px solid var(--ml-orange);
+    border-radius:10px; width:290px; padding:12px 14px; cursor:grab;
+  }
+  .ml-mini-card.dragging { opacity:0.4; }
+  .ml-mini-card.da-ritirare { animation: ml-blink-card 1.4s ease-in-out infinite; }
+  @keyframes ml-blink-card { 0%,100%{box-shadow:0 0 0px #dc354500;} 50%{box-shadow:0 0 14px #dc354588;} }
+  .ml-mc-cliente { font-weight:900; font-size:1rem; color:#e0e0e0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ml-mc-prio { font-size:0.65rem; color:#555; background:#1e1e1e; border-radius:8px; padding:1px 6px; margin-right:5px; }
+  .ml-mc-doc { font-size:0.78rem; font-weight:900; color:var(--ml-orange); margin:2px 0 6px; }
+  .ml-mc-bar { height:4px; border-radius:2px; background:#0d1117; margin:6px 0; overflow:hidden; }
+  .ml-mc-bar-fill { height:100%; background:linear-gradient(90deg,#f0ad4e,#ffd080); }
+  .ml-mc-badges { display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-bottom:6px; }
+  .ml-badge-perc { font-size:0.65rem; padding:2px 6px; border-radius:10px; border:1px solid #f0ad4e33; background:rgba(240,173,78,0.1); color:var(--ml-orange); }
+  .sg-tag { font-size:0.62rem; padding:3px 9px; border-radius:8px; font-weight:900; white-space:nowrap; border:1px solid; letter-spacing:.3px; cursor:pointer; }
+  .sg-daconf   { background:rgba(255,140,0,0.2); color:#ff8c00; border-color:#ff8c0055; }
+  .sg-conf     { background:rgba(40,167,69,0.15); color:#28a745; border-color:#28a74533; }
+  .sg-arrivo   { background:rgba(0,210,255,0.15); color:#00d2ff; border-color:#00d2ff33; }
+  .sg-ritirare { background:rgba(220,53,69,0.25); color:#ff2244; border-color:#dc354588; font-weight:900; }
+  .sg-evasi    { background:rgba(0,210,255,0.12); color:#00d2ff; border-color:#00d2ff66; cursor:default; }
+  .ml-badge-consegna { display:inline-flex; align-items:center; gap:4px; font-size:0.68rem; padding:3px 8px; border-radius:8px; border:1px solid #f0ad4e44; color:var(--ml-orange); background:rgba(240,173,78,0.08); white-space:nowrap; cursor:pointer; margin-top:4px; }
+  .ml-badge-consegna-mancante { display:inline-flex; align-items:center; gap:5px; font-size:0.68rem; font-weight:bold; padding:3px 8px; border-radius:8px; border:1px dashed #f0ad4e88; color:var(--ml-orange); background:rgba(240,173,78,0.08); white-space:nowrap; cursor:pointer; margin-top:4px; }
+  .ml-pickup-select { width:100%; margin-top:6px; background:#111; border:1px solid #f0ad4e44; color:var(--ml-orange); border-radius:6px; padding:4px 6px; font-size:0.72rem; }
+  .ml-mc-articoli { margin-top:8px; font-size:0.75rem; border-top:1px solid #1e1e1e; padding-top:6px; }
+  .ml-mc-art-row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #1a1a1a; }
+</style>
+
+<div class="card">
+  <div class="card-header">📥 Ordini Fornitore <span class="tx-code">stile MasterLogistic — esclusi quelli già fatturati</span></div>
+  <div class="card-body">
+    <div class="theory-note">DA CONFERMARE/CONFERMATO è un flag manuale (conferma del fornitore); IN ARRIVO/EVASI guardano
+      le quantità ricevute reali (EM); DA RITIRARE compare quando hai impostato "Ritiriamo noi" e l'ordine è confermato
+      ma non ancora ricevuto. Trascina le card per riordinare, clicca sul tag di stato per confermare l'ordine.</div>
+
+    <div class="ml-topbar">
+      <div class="ml-filtri">
+        <button class="ml-filtro-btn active" onclick="mlFiltra('TUTTI', this)">TUTTI</button>
+        <button class="ml-filtro-btn f-daconf" onclick="mlFiltra('DA_CONFERMARE', this)">🟠 DA CONFERMARE</button>
+        <button class="ml-filtro-btn f-conf" onclick="mlFiltra('CONFERMATO', this)">✅ CONFERMATO</button>
+        <button class="ml-filtro-btn f-arrivo" onclick="mlFiltra('IN_ARRIVO', this)">🚢 IN ARRIVO</button>
+        <button class="ml-filtro-btn f-ritirare" onclick="mlFiltra('DA_RITIRARE', this)">🚚 DA RITIRARE</button>
+        <button class="ml-filtro-btn f-evasi" onclick="mlFiltra('EVASI', this)">✔ EVASI</button>
+      </div>
+      <input type="text" class="ml-search" placeholder="🔍 Cerca fornitore…" oninput="mlCerca(this.value)">
+    </div>
+
+    <div class="ml-card-grid" id="ml-cards-fornitore">
+      {% for c in cards %}
+      <div class="ml-mini-card {{ 'da-ritirare' if c.stato=='DA_RITIRARE' else '' }}" draggable="true"
+           id="ml-po-{{ c.ordine.id }}" data-id="{{ c.ordine.id }}"
+           data-stato="{{ c.stato }}"
+           data-fornitore="{{ (c.ordine.party.name if c.ordine.party else '') | lower }}">
+        <div class="ml-mc-cliente"><span class="ml-mc-prio">#{{ loop.index }}</span>{{ c.ordine.party.name if c.ordine.party else '—' }}</div>
+        <div class="ml-mc-doc">{{ c.ordine.doc_number }}</div>
+        <div class="ml-mc-bar"><div class="ml-mc-bar-fill" style="width: {{ c.perc }}%;"></div></div>
+        <div class="ml-mc-badges">
+          <span class="ml-badge-perc">📥 {{ c.perc }}% ric.</span>
+          {% if c.stato == 'DA_CONFERMARE' %}
+            <span class="sg-tag sg-daconf" onclick="mlConferma({{ c.ordine.id }}, this)">🟠 DA CONFERMARE</span>
+          {% elif c.stato == 'CONFERMATO' %}
+            <span class="sg-tag sg-conf" onclick="mlConferma({{ c.ordine.id }}, this)">✅ CONFERMATO</span>
+          {% elif c.stato == 'IN_ARRIVO' %}
+            <span class="sg-tag sg-arrivo">🚢 IN ARRIVO</span>
+          {% elif c.stato == 'DA_RITIRARE' %}
+            <span class="sg-tag sg-ritirare">🚚 DA RITIRARE</span>
+          {% elif c.stato == 'EVASI' %}
+            <span class="sg-tag sg-evasi">✔ EVASO</span>
+          {% endif %}
+        </div>
+        {% if c.ordine.delivery_due_date %}
+        <div class="ml-badge-consegna" onclick="mlData('po', {{ c.ordine.id }}, this)">📅 {{ c.ordine.delivery_due_date.strftime('%d/%m/%Y') }}</div>
+        {% else %}
+        <div class="ml-badge-consegna-mancante" onclick="mlData('po', {{ c.ordine.id }}, this)">📅 imposta data</div>
+        {% endif %}
+        <select class="ml-pickup-select" onchange="mlRitiro({{ c.ordine.id }}, this.value)">
+          <option value="consegnano_loro" {{ 'selected' if c.ordine.pickup_mode=='consegnano_loro' }}>🚛 Consegnano loro</option>
+          <option value="ritiriamo_noi" {{ 'selected' if c.ordine.pickup_mode=='ritiriamo_noi' }}>🚚 Ritiriamo noi</option>
+        </select>
+        <div class="ml-mc-articoli">
+          {% for l in c.ordine.lines %}
+          <div class="ml-mc-art-row"><span>{{ l.material.code }}</span><span>{{ "%.0f"|format(l.qty_received or 0) }} / {{ "%.0f"|format(l.qty) }}</span></div>
+          {% endfor %}
+        </div>
+      </div>
+      {% else %}
+      <p>Nessun ordine fornitore aperto.</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+function mlFiltra(stato, btn) {
+  document.querySelectorAll('.ml-filtri .ml-filtro-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('#ml-cards-fornitore .ml-mini-card').forEach(card => {
+    card.style.display = (stato === 'TUTTI' || card.dataset.stato === stato) ? '' : 'none';
+  });
+}
+function mlCerca(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('#ml-cards-fornitore .ml-mini-card').forEach(card => {
+    card.style.display = card.dataset.fornitore.includes(q) ? '' : 'none';
+  });
+}
+function mlConferma(id, el) {
+  fetch(`/logistics/ordini-fornitori/${id}/conferma`, {method: 'POST'})
+    .then(r => r.json()).then(() => location.reload());
+}
+function mlRitiro(id, valore) {
+  fetch(`/logistics/ordini-fornitori/${id}/ritiro`, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({pickup_mode: valore})})
+    .then(r => r.json()).then(() => location.reload());
+}
+function mlData(tipo, id, el) {
+  const attuale = el.textContent.trim().replace('📅','').trim();
+  const nuova = prompt('Data di consegna/ritiro concordata (gg/mm/aaaa) — vuoto per rimuovere:', attuale === 'imposta data' ? '' : attuale);
+  if (nuova === null) return;
+  fetch(`/logistics/ordini-fornitori/${id}/consegna`, {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({data: nuova})})
+    .then(r => r.json()).then(() => location.reload());
+}
+let mlDragEl = null;
+document.querySelectorAll('#ml-cards-fornitore .ml-mini-card').forEach(card => {
+  card.addEventListener('dragstart', () => { mlDragEl = card; card.classList.add('dragging'); });
+  card.addEventListener('dragend', () => {
+    card.classList.remove('dragging');
+    const ids = Array.from(document.querySelectorAll('#ml-cards-fornitore .ml-mini-card')).map(c => c.dataset.id);
+    fetch('/logistics/ordini-fornitori/riordina', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+  });
+  card.addEventListener('dragover', e => {
+    e.preventDefault();
+    const grid = document.getElementById('ml-cards-fornitore');
+    const after = [...grid.querySelectorAll('.ml-mini-card:not(.dragging)')].find(c => e.clientX < c.getBoundingClientRect().left + c.getBoundingClientRect().width/2);
+    if (mlDragEl && mlDragEl !== card) {
+      if (after) grid.insertBefore(mlDragEl, after); else grid.appendChild(mlDragEl);
+    }
+  });
+});
+</script>
+{% endblock %}

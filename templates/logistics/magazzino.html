@@ -1,1 +1,63 @@
-
+{% extends "base.html" %}
+{% block title %}Magazzino / Fabbisogno{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📦 Magazzino / Fabbisogno <span class="tx-code">stile MasterLogistic</span></div>
+  <div class="card-body">
+    <div class="theory-note">Impegnato Clienti e Ordinati Fornitori vengono letti dagli Ordini Cliente/Fornitore
+      ancora aperti in MasterLedger (non da PDF): Disponibilità = Stock + Ordinati − Impegnato.
+      Fabbisogno = quanto manca per tornare alla Scorta Minima impostata per l'articolo.</div>
+    <table class="masterledger-table">
+      <thead>
+        <tr>
+          <th>Codice</th><th>Descrizione</th>
+          <th style="width:90px;">Stock</th>
+          <th style="width:110px;">Impegnato Clienti</th>
+          <th style="width:120px;">Ordinati Fornitori</th>
+          <th style="width:130px;">Disponibilità</th>
+          <th style="width:120px;">Scorta Minima</th>
+          <th style="width:100px;">Fabbisogno</th>
+          <th style="width:90px;">Stato</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in righe %}
+        <tr>
+          <td><b>{{ r.material.code }}</b></td>
+          <td>{{ r.material.description }}</td>
+          <td>{{ "%.0f"|format(r.stock) }}</td>
+          <td>{{ "%.0f"|format(r.impegnato) }}</td>
+          <td>{{ "%.0f"|format(r.ordinati) }}</td>
+          <td><b>{{ "%.0f"|format(r.dispo) }}</b></td>
+          <td>
+            <form method="POST" action="{{ url_for('logistics.aggiorna_scorta_minima', material_id=r.material.id) }}"
+                  style="display:flex; gap:4px;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="number" step="1" min="0" name="reorder_point" value="{{ "%.0f"|format(r.scorta_min) }}"
+                     style="width:70px;">
+              <button class="btn btn-ghost" type="submit" title="Aggiorna scorta minima">💾</button>
+            </form>
+          </td>
+          <td>
+            {% if r.fabbisogno > 0 %}
+              <span class="status-badge status-open">{{ "%.0f"|format(r.fabbisogno) }} da ordinare</span>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>
+            {% if r.stato == 'esaurito' %}
+              <span class="status-badge" style="background:rgba(229,83,75,.2); color:var(--ml-red);">🚨 Esaurito</span>
+            {% elif r.stato == 'sottoscorta' %}
+              <span class="status-badge status-open">⚠️ Sottoscorta</span>
+            {% else %}
+              <span class="status-badge status-paid">✔ OK</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
