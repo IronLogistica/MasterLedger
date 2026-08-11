@@ -2,15 +2,15 @@
 {% block title %}RFQ Fornitori{% endblock %}
 {% block content %}
 <h1>Richieste d’offerta fornitori (RFQ)</h1>
-<p class="muted">RFQ manuali e flusso operativo dai fabbisogni di acquisto del MasterLogistic-WMS.</p>
+<p class="muted">RFQ manuali e flusso operativo dai fabbisogni di acquisto calcolati internamente.</p>
 
 <div class="card">
-  <h2>Fabbisogni WMS → inoltra richieste di preventivo</h2>
-  <p class="muted">Le righe sono lette dal WMS: disponibilità netta e scorta minima generano la quantità proposta. Seleziona materiali e fornitori, modifica la quantità se necessario, poi inoltra.</p>
+  <h2>Fabbisogni di acquisto → inoltra richieste di preventivo</h2>
+  <p class="muted">Le righe sono calcolate dagli ordini aperti e dalla giacenza interna di MasterLedger: impegnato su ordini cliente meno giacenza meno quantità già in arrivo da ordini fornitore. Seleziona materiali e fornitori, modifica la quantità se necessario, poi inoltra.</p>
   {% if wms_error %}
     <p class="alert alert-warning">⚠️ {{ wms_error }}</p>
   {% elif not wms_needs %}
-    <p class="muted">Nessun fabbisogno di acquisto attuale dal WMS.</p>
+    <p class="muted">Nessun fabbisogno di acquisto attuale.</p>
   {% else %}
   <form method="post" action="{{ url_for('mm.rfq_from_wms_needs') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <fieldset style="margin-bottom:1rem"><legend>Fornitori destinatari</legend>
@@ -18,11 +18,11 @@
         <label style="display:inline-block;margin:0 .9rem .4rem 0"><input type="checkbox" name="vendor_ids" value="{{ v.id }}"> {{ v.name }}{% if not v.email and not v.pec %} <small class="muted">(senza e-mail/PEC)</small>{% endif %}</label>
       {% else %}<span class="muted">Nessun fornitore attivo.</span>{% endfor %}
     </fieldset>
-    <table><thead><tr><th>Seleziona</th><th>SKU</th><th>Descrizione</th><th>Disp. netta</th><th>Scorta min.</th><th>Fabbisogno WMS</th><th>Qtà RFQ</th><th>Stato anagrafica</th></tr></thead><tbody>
+    <table><thead><tr><th>Seleziona</th><th>SKU</th><th>Descrizione</th><th>Giacenza</th><th>Impegnato</th><th>In arrivo</th><th>Fabbisogno netto</th><th>Qtà RFQ</th><th>Stato anagrafica</th></tr></thead><tbody>
       {% for row in wms_needs %}
       <tr>
         <td><input type="checkbox" name="sku" value="{{ row.sku }}" {% if row.material %}checked{% else %}disabled{% endif %}></td>
-        <td>{{ row.sku }}</td><td>{{ row.desc or '—' }}</td><td>{{ row.dispo_netta }}</td><td>{{ row.scorta_minima }}</td><td><strong>{{ row.fabbisogno_netto }}</strong></td>
+        <td>{{ row.sku }}</td><td>{{ row.descrizione or '—' }}</td><td>{{ row.stock }}</td><td>{{ row.impegnato }}</td><td>{{ row.in_arrivo }}</td><td><strong>{{ row.fabbisogno_netto }}</strong></td>
         <td><input name="qty_{{ row.sku }}" type="number" min="0.001" step="0.001" value="{{ row.fabbisogno_netto }}" {% if not row.material %}disabled{% endif %}></td>
         <td>{% if row.material %}<span class="badge">{{ row.material.code }} collegato</span>{% else %}<span class="badge">Manca in MasterLedger</span>{% endif %}</td>
       </tr>
