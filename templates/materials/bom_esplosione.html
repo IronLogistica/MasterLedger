@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Esplosione Distinta Base{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🔎 Esplosione — {{ bom.parent_material.code }} v{{ bom.version }} (per 1 unità)</div>
+  <div class="card-body">
+    <p>Componenti FOGLIA risolti ricorsivamente (i semilavorati con una propria distinta base sono esplosi a loro volta, non consumati come tali).</p>
+    {% if righe %}
+    <table class="masterledger-table">
+      <thead><tr><th>Componente</th><th class="td-num">Qtà necessaria</th></tr></thead>
+      <tbody>
+        {% for r in righe %}
+        <tr><td class="mono">{{ r.material.code }} — {{ r.material.description }}</td><td class="td-num">{{ '%.4f'|format(r.qty) }} {{ r.material.uom }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun componente.</div>{% endif %}
+    <div class="btn-row"><a class="btn btn-ghost" href="{{ url_for('materials.bom_list') }}">← Torna alle Distinte Base</a></div>
+  </div>
+</div>
+{% endblock %}

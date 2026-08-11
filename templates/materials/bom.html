@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Distinta Base{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🧩 Nuova Distinta Base <span class="tx-code">CS01</span></div>
+  <div class="card-body">
+    <form method="POST">
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div class="form-group">
+          <label>Prodotto padre (FERT/HALB) <span class="req">*</span></label>
+          <select name="parent_material_id" required>
+            <option value="">— seleziona —</option>
+            {% for p in parents %}<option value="{{ p.id }}">{{ p.code }} — {{ p.description }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Note versione</label><input type="text" name="notes"></div>
+      </div>
+      <table class="masterledger-table">
+        <thead><tr><th>Componente</th><th style="width:140px;">Qtà per unità padre</th><th style="width:120px;">Scarto %</th></tr></thead>
+        <tbody>
+          {% for i in range(10) %}
+          <tr>
+            <td><select name="comp_{{ i }}"><option value="">— componente —</option>
+              {% for c in components_available %}<option value="{{ c.id }}">{{ c.code }} — {{ c.description }}</option>{% endfor %}
+            </select></td>
+            <td><input type="number" step="0.0001" min="0.0001" name="qty_{{ i }}"></td>
+            <td><input type="number" step="0.01" min="0" name="scrap_{{ i }}" placeholder="0"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="theory-note">Ogni salvataggio apre una NUOVA versione: la distinta base precedente resta per storico/riconciliazione dei consuntivi già registrati, ma i nuovi calcoli usano sempre l'ultima versione attiva — stesso principio dei Costi Standard mensili.</div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Crea versione</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Distinte Base attive</div>
+  <div class="card-body">
+    {% if boms %}
+    <table class="masterledger-table">
+      <thead><tr><th>Prodotto padre</th><th>Versione</th><th>Componenti</th><th></th></tr></thead>
+      <tbody>
+        {% for b in boms %}
+        <tr>
+          <td class="mono fw-bold">{{ b.parent_material.code }} — {{ b.parent_material.description }}</td>
+          <td>v{{ b.version }}</td>
+          <td>{{ b.components|length }}</td>
+          <td><a class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px;" href="{{ url_for('materials.bom_esplosione', bom_id=b.id) }}">🔎 Esplosione</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna distinta base ancora creata.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
