@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Analisi costo prodotto{% endblock %}
+{% block content %}
+<div class="page-header"><h1>📊 Analisi costo prodotto, target e varianze</h1><p>Confronto trasparente fra consuntivi di Produzione Completata, costo standard e costo obiettivo.</p></div>
+
+<div class="card">
+  <div class="card-header">Filtro di analisi</div>
+  <div class="card-body">
+    <div class="form-row">
+      <div class="form-group"><label for="material_id">Articolo</label><select id="material_id" required><option value="">— seleziona —</option>{% for m in materials %}<option value="{{ m.id }}" {{ 'selected' if selected_id == m.id }}>{{ m.code }} — {{ m.description }}</option>{% endfor %}</select></div>
+      <div class="form-group"><label for="date_from">Dal</label><input id="date_from" type="date"></div>
+      <div class="form-group"><label for="date_to">Al</label><input id="date_to" type="date" value="{{ today }}"></div>
+      <div class="form-group form-action"><label>&nbsp;</label><button type="button" class="btn btn-primary" onclick="loadAnalysis()">Aggiorna analisi</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="card" id="result-card" style="display:none">
+  <div class="card-header">Risultato</div>
+  <div class="card-body">
+    <div id="summary"></div>
+    <div id="warnings"></div>
+    <div class="table-wrap"><table><thead><tr><th>Voce</th><th class="td-num">Effettivo €</th><th class="td-num">Standard €</th><th class="td-num">Target €</th><th class="td-num">Var. vs std € / %</th><th class="td-num">Var. vs target € / %</th></tr></thead><tbody id="cost-rows"></tbody></table></div>
+    <div id="unit-cost" class="info-box" style="margin-top:16px"></div>
+    <h3 style="margin-top:20px">Registrazioni incluse</h3>
+    <div class="table-wrap"><table><thead><tr><th>Documento</th><th>Data</th><th class="td-num">Q.tà</th><th class="td-num">Materiali eff.</th><th class="td-num">MOD eff.</th><th class="td-num">Overhead eff.</th><th>Standard</th></tr></thead><tbody id="entry-rows"></tbody></table></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">🎯 Nuova versione costo target</div>
+  <div class="card-body">
+    <p class="form-hint">Il target è unitario e decorre dalla data indicata. Una nuova data conserva lo storico; non modifica lo standard né le registrazioni consuntive.</p>
+    <form method="post" action="{{ url_for('production.analisi_costo_prodotto') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-row">
+        <div class="form-group"><label>Articolo</label><select name="material_id" required><option value="">— seleziona —</option>{% for m in materials %}<option value="{{ m.id }}" {{ 'selected' if selected_id == m.id }}>{{ m.code }} — {{ m.description }}</option>{% endfor %}</select></div>
+        <div class="form-group"><label>Decorrenza</label><input name="effective_date" type="date" value="{{ today }}" required></div>
+        <div class="form-group"><label>Materiali €/u.</label><input name="target_material_cost" type="number" min="0" step="0.0001" value="0"></div>
+        <div class="form-group"><label>Manodopera €/u.</label><input name="target_labor_cost" type="number" min="0" step="0.0001" value="0"></div>
+        <div class="form-group"><label>Overhead €/u.</label><input name="target_overhead_cost" type="number" min="0" step="0.0001" value="0"></div>
+      </div>
+      <div class="form-row"><div class="form-group form-grow"><label>Note</label><input name="notes" maxlength="300" placeholder="Es. budget 2026"></div><div class="form-group form-action"><label>&nbsp;</label><button class="btn btn-primary" type="submit">Salva target</button></div></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">Storico costi target</div>
+  <div class="card-body table-wrap"><table><thead><tr><th>Articolo</th><th>Decorrenza</th><th class="td-num">Materiali</th><th class="td-num">MOD</th><th class="td-num">Overhead</th><th class="td-num">Totale</th><th>Note</th></tr></thead><tbody>{% for t in targets %}<tr><td>{{ t.material.code }}</td><td>{{ t.effective_date.strftime('%d/%m/%Y') }}</td><td class="td-num">{{ '%.4f'|format(t.target_material_cost) }}</td><td class="td-num">{{ '%.4f'|format(t.target_labor_cost) }}</td><td class="td-num">{{ '%.4f'|format(t.target_overhead_cost) }}</td><td class="td-num fw-bold">{{ '%.4f'|format(t.target_total_unitario) }}</td><td>{{ t.notes or '—' }}</td></tr>{% else %}<tr><td colspan="7" class="empty-state">Nessun target inserito.</td></tr>{% endfor %}</tbody></table></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const eur = value => value === null || value === undefined ? '—' : Number(value).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct = value => value === null || value === undefined ? '—' : `${value > 0 ? '+' : ''}${Number(value).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})}%`;
+const signed = value => value === null || value === undefined ? '—' : `${value > 0 ? '+' : ''}${eur(value)}`;
+const varianceClass = value => value > 0 ? 'text-danger' : (value < 0 ? 'text-success' : '');
+async function loadAnalysis() {
+  const id = document.getElementById('material_id').value;
+  if (!id) { alert('Seleziona un articolo.'); return; }
+  const params = new URLSearchParams({material_id:id});
+  for (const [input,key] of [['date_from','da'],['date_to','a']]) { const v=document.getElementById(input).value; if(v) params.set(key,v); }
+  const response = await fetch(`{{ url_for('production.api_analisi_costo_prodotto') }}?${params}`);
+  const data = await response.json();
+  if (!data.ok) { alert(data.error || 'Errore di analisi'); return; }
+  document.getElementById('result-card').style.display = '';
+  document.getElementById('summary').innerHTML = `<p><b>${data.materiale.codice}</b> — ${data.materiale.descrizione}; quantità prodotta: <b>${data.quantita_prodotta}</b>. ${data.target ? `Target valido dal <b>${data.target.decorrenza}</b>.` : ''}</p><ul>${data.riepilogo.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+  document.getElementById('warnings').innerHTML = data.limiti.length ? `<div class="alert alert-warning"><b>Avvertenze sui dati</b><ul>${data.limiti.map(x=>`<li>${x}</li>`).join('')}</ul></div>` : '';
+  document.getElementById('cost-rows').innerHTML = data.righe.map(r => `<tr class="${r.voce==='TOTALE'?'fw-bold':''}"><td>${r.voce}</td><td class="td-num">${eur(r.effettivo)}</td><td class="td-num">${eur(r.standard)}</td><td class="td-num">${eur(r.target)}</td><td class="td-num ${varianceClass(r.varianza_standard)}">${signed(r.varianza_standard)} / ${pct(r.varianza_standard_pct)}</td><td class="td-num ${varianceClass(r.varianza_target)}">${signed(r.varianza_target)} / ${pct(r.varianza_target_pct)}</td></tr>`).join('');
+  const u=data.costo_unitario; document.getElementById('unit-cost').innerHTML = u ? `<b>Costo unitario:</b> Effettivo € ${eur(u.effettivo)} · Standard € ${eur(u.standard)} · Target € ${eur(u.target)}` : '<b>Costo unitario non calcolabile:</b> quantità prodotta pari a zero.';
+  document.getElementById('entry-rows').innerHTML = data.registrazioni.length ? data.registrazioni.map(e=>`<tr><td>${e.numero}</td><td>${e.data}</td><td class="td-num">${e.quantita}</td><td class="td-num">${eur(e.effettivo.materiali)}</td><td class="td-num">${eur(e.effettivo.manodopera)}</td><td class="td-num">${eur(e.effettivo.overhead)}</td><td>${e.standard_disponibile?'Disponibile':'Non disponibile'}</td></tr>`).join('') : '<tr><td colspan="7" class="empty-state">Nessuna registrazione nel periodo.</td></tr>';
+}
+{% if selected_id %}loadAnalysis();{% endif %}
+</script>
+{% endblock %}
