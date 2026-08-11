@@ -56,6 +56,8 @@
     <a class="sidebar-link {{ 'active' if request.endpoint=='parties.party_list' }}" href="{{ url_for('parties.party_list') }}">🤝 Soggetti Economici</a>
     <a class="sidebar-link {{ 'active' if request.endpoint=='materials.material_list' }}" href="{{ url_for('materials.material_list') }}">🏷️ Articoli</a>
     <a class="sidebar-link {{ 'active' if request.endpoint in ('materials.bom_list','materials.bom_esplosione') }}" href="{{ url_for('materials.bom_list') }}">🧩 Distinta Base</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='materials.work_center_list' }}" href="{{ url_for('materials.work_center_list') }}">🏭 Centri di Lavoro</a>
+    <a class="sidebar-link {{ 'active' if request.endpoint=='materials.routing_list' }}" href="{{ url_for('materials.routing_list') }}">⚙️ Ciclo di Lavorazione</a>
 
     <div class="sidebar-title">Ciclo Fornitore (AP)</div>
     <a class="sidebar-link {{ 'active' if request.endpoint=='ap.supplier_invoice' }}" href="{{ url_for('ap.supplier_invoice') }}">📥 Fatture fornitore</a>
