@@ -36,6 +36,7 @@ from services.mm_invoice_quantities import (
     actual_invoiced_qty, reconcile_invoiced_qty, has_untracked_active_invoice,
     lock_po_lines, has_tracked_active_invoice,
 )
+from services.payments import create_installments_for_invoice
 
 mm_bp = Blueprint("mm", __name__, template_folder="../../templates/mm")
 
@@ -416,6 +417,13 @@ def invoice_verification():
             # esattamente le quantità giuste su ogni riga ordine.
             for r in match_rows:
                 db.session.add(InvoiceVerificationLine(entry_id=entry.id, po_line_id=r["line"].id, qty=r["qty"]))
+            # Come ogni altra fattura fornitore (AP manuale, import XML): senza
+            # questa chiamata la fattura non compare mai nello Scadenzario e non
+            # può essere pagata parzialmente da lì — restava un'incoerenza tra
+            # come nasce una KR qui vs altrove (la pulizia dati di prova più giù,
+            # _elimina_pagamenti_orfani_mm, gestiva già le rate: la creazione era
+            # l'unico pezzo mancante).
+            create_installments_for_invoice(entry)
             db.session.commit()
             flash(f"✅ Three-way match superato. Fattura {entry.doc_number} registrata — "
                   f"{float(gross):.2f} € (imponibile {float(total_net_invoice):.2f} + IVA {float(total_vat):.2f}). "
@@ -483,6 +491,12 @@ def _elimina_scrittura_mm(entry_id):
             f"Il documento {entry.doc_number} è collegato a uno storno — non eliminabile da qui."
         )
     _elimina_pagamenti_orfani_mm([entry_id])
+    # Le rate di QUESTA fattura (create da create_installments_for_invoice)
+    # vanno eliminate esplicitamente: _elimina_pagamenti_orfani_mm ha già
+    # ripulito le allocazioni/pagamenti che le referenziavano, ma non le
+    # righe InvoiceInstallment stesse — senza questo, l'eliminazione della
+    # JournalEntry fallirebbe per il vincolo di chiave esterna.
+    InvoiceInstallment.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
     InvoiceVerificationLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
     JournalLine.query.filter_by(entry_id=entry_id).delete(synchronize_session=False)
     JournalEntry.query.filter_by(id=entry_id).delete(synchronize_session=False)
@@ -555,6 +569,16 @@ def goods_receipt_elimina(receipt_id):
     for gr_line in gr.lines:
         po_line = locked_by_id[gr_line.po_line_id]
         po_line.qty_received = Decimal(str(po_line.qty_received or 0)) - Decimal(str(gr_line.qty))
+        # Senza questo, il magazzino interno resta gonfiato per sempre: la
+        # giacenza caricata da questa Entrata Merci (post_stock_movement in
+        # goods_receipts()) non veniva mai stornata quando l'Entrata Merci
+        # veniva eliminata da qui.
+        post_stock_movement(
+            material_id=po_line.material_id, qty=-Decimal(str(gr_line.qty)), movement_type="adjustment",
+            source_type="goods_receipt_elimina", source_id=gr.id,
+            notes=f"Eliminazione Entrata Merci {doc_number}", created_by_id=current_user.id,
+            allow_negative=True,
+        )
     db.session.flush()
     if entry_id:
         try:
@@ -666,7 +690,8 @@ def rfq_from_wms_needs():
             qty = Decimal(str(quantities.get('qty_' + sku, row['fabbisogno_netto'])).replace(',', '.'))
             if qty <= 0: continue
             rfq = RequestForQuotation(rfq_number=DocumentSequence.next_number('RFQ','35'), material_id=mat.id, qty=qty,
-                notes=f'Generata dal fabbisogno WMS: disponibilità {row.get("dispo_netta", 0)}, scorta minima {row.get("scorta_minima", 0)}.',
+                notes=(f'Generata dal fabbisogno: giacenza {row.get("stock", 0)}, '
+                      f'impegnato su ordini {row.get("impegnato", 0)}, in arrivo {row.get("in_arrivo", 0)}.'),
                 created_by_id=current_user.id)
             db.session.add(rfq); db.session.flush(); created.append(rfq)
             successful = False
