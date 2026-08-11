@@ -421,6 +421,7 @@ def deliveries():
                 unit_cost = Decimal(str(l.material.standard_cost))
                 line_cogs = (qty * unit_cost).quantize(Decimal("0.01"))
                 dl = DeliveryLine(delivery_id=d.id, material_id=l.material_id,
+                                  sales_order_line_id=l.id,
                                   qty=qty, price=l.price, unit_cost=unit_cost)
                 db.session.add(dl)
                 db.session.flush()
