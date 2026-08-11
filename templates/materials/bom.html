@@ -4,7 +4,7 @@
 <div class="card">
   <div class="card-header">🧩 Nuova Distinta Base <span class="tx-code">CS01</span></div>
   <div class="card-body">
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid" style="margin-bottom:12px;">
         <div class="form-group">
           <label>Prodotto padre (FERT/HALB) <span class="req">*</span></label>
