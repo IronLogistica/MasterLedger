@@ -50,6 +50,7 @@ def create_app(config_class=Config):
     from blueprints.mm.routes import mm_bp
     from blueprints.production.routes import production_bp
     from blueprints.materials.routes import materials_bp
+    from blueprints.logistics.routes import logistics_bp
     from blueprints.parties.routes import parties_bp
     from blueprints.payroll.routes import payroll_bp
     from blueprints.operations.routes import operations_bp
@@ -66,6 +67,7 @@ def create_app(config_class=Config):
     app.register_blueprint(mm_bp, url_prefix="/mm")
     app.register_blueprint(production_bp, url_prefix="/produzione")
     app.register_blueprint(materials_bp, url_prefix="/materials")
+    app.register_blueprint(logistics_bp, url_prefix="/logistics")
     app.register_blueprint(parties_bp, url_prefix="/soggetti-economici")
     app.register_blueprint(payroll_bp, url_prefix="/paghe")
     app.register_blueprint(operations_bp, url_prefix="/produzione-operativa")
@@ -131,6 +133,168 @@ def create_app(config_class=Config):
                         ))
         print(f"Database svuotato: {len(table_names)} tabelle azzerate.")
         print("Ora rilancia: flask --app app seed")
+
+    # ── Comando CLI: reset MANTENENDO anagrafica partner + piano dei conti ──
+    # Svuota tutto il resto (articoli, BOM, cicli, magazzino, scritture,
+    # documenti SD/MM/produzione/paghe/cespiti/banca, parametri fiscali,
+    # sedi/aree magazzino, sequenze documento, periodi contabili) ma NON
+    # tocca economic_subjects (clienti/fornitori), accounts (piano dei
+    # conti), account_mappings, users (altrimenti nessuno potrebbe più fare
+    # login), cost_centers (centri di costo) né work_centers (centri di
+    # lavoro/produzione). Pensato per ripartire puliti sui dati operativi
+    # tenendo anagrafica, piano dei conti e struttura organizzativa già
+    # validati.
+    TABELLE_DA_MANTENERE = {"economic_subjects", "accounts", "users", "account_mappings",
+                            "cost_centers", "work_centers"}
+
+    @app.cli.command("reset-mantieni-anagrafica")
+    @click.option("--yes-i-am-sure", is_flag=True,
+                 help="Conferma esplicita: senza questo flag il comando non fa nulla.")
+    def reset_mantieni_anagrafica(yes_i_am_sure):
+        """Svuota TUTTO tranne anagrafica partner, piano dei conti, mappatura
+        conti, centri di costo, centri di lavoro e utenti (irreversibile).
+        Uso: flask --app app reset-mantieni-anagrafica --yes-i-am-sure
+        """
+        if not yes_i_am_sure:
+            print("ATTENZIONE: questo comando CANCELLA articoli, BOM, cicli di lavorazione, magazzino,")
+            print("scritture contabili, documenti SD/MM/produzione/paghe/cespiti/banca, parametri")
+            print("fiscali, sedi/aree magazzino, sequenze documento e periodi contabili. RESTANO:")
+            print("anagrafica clienti/fornitori, piano dei conti, mappatura conti, centri di costo,")
+            print("centri di lavoro e utenti. Irreversibile.")
+            print("Se sei sicuro, rilancia con: flask --app app reset-mantieni-anagrafica --yes-i-am-sure")
+            return
+
+        with app.app_context():
+            engine = db.engine
+            table_names = [t.name for t in db.metadata.sorted_tables if t.name not in TABELLE_DA_MANTENERE]
+            with engine.begin() as conn:
+                if engine.dialect.name == "postgresql":
+                    if table_names:
+                        conn.execute(db.text(
+                            f"TRUNCATE TABLE {', '.join(table_names)} RESTART IDENTITY CASCADE;"
+                        ))
+                else:
+                    for name in reversed(table_names):
+                        conn.execute(db.text(f"DELETE FROM {name};"))
+                    has_sequence = conn.execute(db.text(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_sequence';"
+                    )).fetchone()
+                    if has_sequence:
+                        conn.execute(db.text(
+                            "DELETE FROM sqlite_sequence WHERE name IN "
+                            f"({','.join(repr(n) for n in table_names)});"
+                        ))
+        print(f"Database svuotato: {len(table_names)} tabelle azzerate, "
+              f"{len(TABELLE_DA_MANTENERE)} mantenute ({', '.join(sorted(TABELLE_DA_MANTENERE))}).")
+        print("Ora rilancia: flask --app app seed-esempio-costo-pieno per creare 2 prodotti di prova con BOM+Routing.")
+
+    # ── Comando CLI: 2 prodotti di esempio con BOM + Routing + centro di ──
+    # lavoro, per testare subito il costo pieno dopo un reset-mantieni-
+    # anagrafica (o su un database nuovo). Usa i codici conto magazzino del
+    # piano dei conti standard (150000/155000/160000) — presuppone quindi che
+    # il piano dei conti sia già presente (seed oppure reset-mantieni-anagrafica).
+    @app.cli.command("seed-esempio-costo-pieno")
+    def seed_esempio_costo_pieno():
+        """Crea 2 prodotti finiti di esempio con BOM + Ciclo di Lavorazione +
+        Centro di Lavoro, per testare subito il costo pieno (metodo SAP).
+        Uso: flask --app app seed-esempio-costo-pieno
+        """
+        from decimal import Decimal
+        from models import Material, BillOfMaterial, BOMComponent, WorkCenter, Routing, RoutingOperation, CostCenter
+
+        with app.app_context():
+            cc = CostCenter.query.filter_by(code="CC-PROD-01").first()
+            if cc is None:
+                cc = CostCenter(code="CC-PROD-01", name="Produzione")
+                db.session.add(cc)
+                db.session.flush()
+
+            taglio = WorkCenter.query.filter_by(code="TAGLIO-01").first()
+            if taglio is None:
+                taglio = WorkCenter(code="TAGLIO-01", description="Taglio e piegatura",
+                                    cost_center_id=cc.id, capacity_hours_month=Decimal("160"),
+                                    hourly_rate_labor=Decimal("18"))
+                db.session.add(taglio)
+            assemblaggio = WorkCenter.query.filter_by(code="ASSEMBLAGGIO-01").first()
+            if assemblaggio is None:
+                assemblaggio = WorkCenter(code="ASSEMBLAGGIO-01", description="Assemblaggio e confezionamento",
+                                          cost_center_id=cc.id, capacity_hours_month=Decimal("160"),
+                                          hourly_rate_labor=Decimal("16"))
+                db.session.add(assemblaggio)
+            db.session.flush()
+
+            def _articolo(code, description, material_type, standard_cost, sales_price, is_carp=False):
+                m = Material.query.filter_by(code=code).first()
+                if m is None:
+                    m = Material(code=code, description=description, material_type=material_type,
+                                uom="PZ", standard_cost=standard_cost, sales_price=sales_price,
+                                vat_rate=Decimal("22"), qty_on_hand=Decimal("0"),
+                                is_carpenteria_propria=is_carp)
+                    db.session.add(m)
+                    db.session.flush()
+                return m
+
+            # Materie prime dei due prodotti di esempio
+            lamiera = _articolo("ES-LAMIERA", "Lamiera zincata 2mm", "ROH", Decimal("12"), Decimal("0"))
+            vite = _articolo("ES-VITE", "Vite autofilettante 6x40", "ROH", Decimal("0.35"), Decimal("0"))
+            palo = _articolo("ES-PALO", "Palo zincato 3m", "ROH", Decimal("28"), Decimal("0"))
+            staffa = _articolo("ES-STAFFA", "Staffa di fissaggio", "ROH", Decimal("4.50"), Decimal("0"))
+
+            # Prodotto 1: cartello stradale
+            cartello = _articolo("ES-CARTELLO-01", "Cartello stradale triangolare 90cm", "FERT",
+                                 Decimal("0"), Decimal("95"), is_carp=True)
+            bom1 = BillOfMaterial.query.filter_by(parent_material_id=cartello.id, active=True).first()
+            if bom1 is None:
+                bom1 = BillOfMaterial(parent_material_id=cartello.id, version="1", active=True,
+                                      notes="Esempio seed-esempio-costo-pieno")
+                db.session.add(bom1); db.session.flush()
+                db.session.add_all([
+                    BOMComponent(bom_id=bom1.id, component_material_id=lamiera.id, qty_per=Decimal("1"), scrap_pct=Decimal("5")),
+                    BOMComponent(bom_id=bom1.id, component_material_id=vite.id, qty_per=Decimal("6"), scrap_pct=Decimal("0")),
+                ])
+            routing1 = Routing.query.filter_by(parent_material_id=cartello.id, active=True).first()
+            if routing1 is None:
+                routing1 = Routing(parent_material_id=cartello.id, version="1", active=True,
+                                   notes="Esempio seed-esempio-costo-pieno")
+                db.session.add(routing1); db.session.flush()
+                db.session.add_all([
+                    RoutingOperation(routing_id=routing1.id, seq=10, work_center_id=taglio.id,
+                                     description="Taglio e piegatura lamiera",
+                                     machine_time_min=Decimal("8"), labor_time_min=Decimal("4")),
+                    RoutingOperation(routing_id=routing1.id, seq=20, work_center_id=assemblaggio.id,
+                                     description="Assemblaggio e confezionamento",
+                                     machine_time_min=Decimal("0"), labor_time_min=Decimal("5")),
+                ])
+
+            # Prodotto 2: segnale su palo
+            segnale = _articolo("ES-SEGNALE-01", "Segnale su palo con staffa", "FERT",
+                                Decimal("0"), Decimal("140"), is_carp=True)
+            bom2 = BillOfMaterial.query.filter_by(parent_material_id=segnale.id, active=True).first()
+            if bom2 is None:
+                bom2 = BillOfMaterial(parent_material_id=segnale.id, version="1", active=True,
+                                      notes="Esempio seed-esempio-costo-pieno")
+                db.session.add(bom2); db.session.flush()
+                db.session.add_all([
+                    BOMComponent(bom_id=bom2.id, component_material_id=cartello.id, qty_per=Decimal("1"), scrap_pct=Decimal("0")),
+                    BOMComponent(bom_id=bom2.id, component_material_id=palo.id, qty_per=Decimal("1"), scrap_pct=Decimal("0")),
+                    BOMComponent(bom_id=bom2.id, component_material_id=staffa.id, qty_per=Decimal("2"), scrap_pct=Decimal("0")),
+                ])
+            routing2 = Routing.query.filter_by(parent_material_id=segnale.id, active=True).first()
+            if routing2 is None:
+                routing2 = Routing(parent_material_id=segnale.id, version="1", active=True,
+                                   notes="Esempio seed-esempio-costo-pieno")
+                db.session.add(routing2); db.session.flush()
+                db.session.add(
+                    RoutingOperation(routing_id=routing2.id, seq=10, work_center_id=assemblaggio.id,
+                                     description="Fissaggio segnale su palo",
+                                     machine_time_min=Decimal("0"), labor_time_min=Decimal("12")),
+                )
+
+            db.session.commit()
+        print("Creati: 1 centro di costo, 2 centri di lavoro (TAGLIO-01, ASSEMBLAGGIO-01),")
+        print("4 materie prime, 2 prodotti finiti con BOM+Routing attivi (ES-CARTELLO-01, ES-SEGNALE-01).")
+        print("Manca ancora il pool overhead del mese, assegnato ai centri, in 'Pool Overhead Reparto' —")
+        print("senza quello la tariffa oraria di overhead resta 0 e 'Costo Standard' lo segnala come avviso.")
 
     # ── Bootstrap automatico (Railway): SOLO conti/utenti garantiti ──
     # FIX (19/07/2026): qui c'era anche un db.create_all() automatico ad ogni
