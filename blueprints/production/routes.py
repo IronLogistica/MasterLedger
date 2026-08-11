@@ -30,10 +30,11 @@ from flask_login import login_required, current_user
 from extensions import db
 from models import (Account, Material, ProductionEntry, DocumentSequence, Delivery, DeliveryLine,
                      ProductionOverheadItem, OverheadAdjustment, JournalEntry, JournalLine, StandardCost,
-                     ProductCostTarget)
+                     ProductCostTarget, WorkCenter)
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.warehouse import bom_components, post_stock_movement, WarehouseError
 from services.product_cost import money, variance, variance_pct, classification
+from services.routing_cost import calcola_costo_pieno_da_routing, active_routing
 
 production_bp = Blueprint("production", __name__, template_folder="../../templates/production")
 
@@ -295,6 +296,46 @@ def calcola_overhead():
     return jsonify({"quota": float(quota), "dettaglio": dettaglio, "pool_totale": float(pool_totale), "avviso": avviso})
 
 
+@production_bp.route("/calcola-costo-pieno")
+@login_required
+def calcola_costo_pieno():
+    """
+    Endpoint AJAX: costo pieno standard di un prodotto calcolato col metodo
+    SAP — materiali dalla Distinta Base (BOM), manodopera diretta + overhead
+    dal Ciclo di Lavorazione (Routing) con tariffa oraria di centro di
+    lavoro. Sostituisce, per gli articoli che hanno un ciclo attivo, la
+    quota-fatturato approssimata di /calcola-overhead. Solo anteprima, non
+    scrive nulla — usato per innestare/verificare BOM+Routing+overhead prima
+    di decidere se azzerare il metodo precedente.
+    """
+    material_id = request.args.get("material_id", type=int)
+    mese = request.args.get("mese", "").strip()
+    material = Material.query.get(material_id)
+    if material is None:
+        return jsonify({"error": "Prodotto finito non valido."}), 400
+    try:
+        anno, mese_num = (int(x) for x in mese.split("-"))
+    except Exception:
+        return jsonify({"error": "Seleziona il mese di riferimento."}), 400
+
+    totale_materiali, dettaglio_materiali = _calcola_materie_prime_da_bom(material, Decimal("1"))
+    totale_manodopera, totale_overhead, dettaglio_routing, avvisi = calcola_costo_pieno_da_routing(
+        material, anno, mese_num)
+
+    if not dettaglio_materiali:
+        avvisi = [f'Nessuna distinta base trovata per {material.code} — crealo in "Distinta Base".'] + avvisi
+
+    return jsonify({
+        "costo_materiali": float(totale_materiali),
+        "costo_manodopera": float(totale_manodopera),
+        "costo_overhead": float(totale_overhead),
+        "costo_pieno_unitario": float(totale_materiali + totale_manodopera + totale_overhead),
+        "dettaglio_materiali": dettaglio_materiali,
+        "dettaglio_routing": dettaglio_routing,
+        "avvisi": avvisi,
+    })
+
+
 def _trova_standard_applicabile(material_id, anno, mese):
     """
     Trova il Costo Standard applicabile per un materiale in un dato anno/mese:
@@ -394,8 +435,10 @@ def pool_reparto():
             flash("Descrizione, anno e mese sono obbligatori.", "danger")
             return redirect(url_for("production.pool_reparto"))
 
-        db.session.add(ProductionOverheadItem(year=anno, month=mese, description=descrizione,
-                                               amount=importo, created_by_id=current_user.id))
+        db.session.add(ProductionOverheadItem(
+            year=anno, month=mese, description=descrizione, amount=importo,
+            work_center_id=request.form.get("work_center_id", type=int) or None,
+            created_by_id=current_user.id))
         db.session.commit()
         flash("Voce salvata.", "success")
         return redirect(url_for("production.pool_reparto"))
@@ -409,7 +452,8 @@ def pool_reparto():
         gruppi.setdefault(chiave, {"voci": [], "totale": Decimal("0")})
         gruppi[chiave]["voci"].append(v)
         gruppi[chiave]["totale"] += Decimal(str(v.amount or 0))
-    return render_template("production/pool_reparto.html", gruppi=gruppi)
+    centri = WorkCenter.query.filter_by(active=True).order_by(WorkCenter.code).all()
+    return render_template("production/pool_reparto.html", gruppi=gruppi, centri=centri)
 
 
 @production_bp.route("/pool-reparto/<int:voce_id>/elimina", methods=["POST"])
