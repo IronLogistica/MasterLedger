@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Ciclo di Lavorazione{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">⚙️ Nuovo Ciclo di Lavorazione <span class="tx-code">CA01</span></div>
+  <div class="card-body">
+    {% if not centri_disponibili %}
+    <div class="empty-state">Crea prima almeno un <a href="{{ url_for('materials.work_center_list') }}">Centro di Lavoro</a>.</div>
+    {% else %}
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid" style="margin-bottom:12px;">
+        <div class="form-group">
+          <label>Prodotto padre (FERT/HALB) <span class="req">*</span></label>
+          <select name="parent_material_id" required>
+            <option value="">— seleziona —</option>
+            {% for p in parents %}<option value="{{ p.id }}">{{ p.code }} — {{ p.description }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Note versione</label><input type="text" name="notes"></div>
+      </div>
+      <table class="masterledger-table">
+        <thead><tr><th style="width:70px;">Fase</th><th>Centro di lavoro</th><th>Descrizione</th>
+          <th style="width:130px;">Min. macchina/unità</th><th style="width:130px;">Min. manodopera/unità</th></tr></thead>
+        <tbody>
+          {% for i in range(10) %}
+          <tr>
+            <td class="mono">{{ (i + 1) * 10 }}</td>
+            <td><select name="wc_{{ i }}"><option value="">— centro —</option>
+              {% for c in centri_disponibili %}<option value="{{ c.id }}">{{ c.code }} — {{ c.description }}</option>{% endfor %}
+            </select></td>
+            <td><input type="text" name="descr_{{ i }}"></td>
+            <td><input type="number" step="0.0001" min="0" name="macchina_{{ i }}"></td>
+            <td><input type="number" step="0.0001" min="0" name="manodopera_{{ i }}"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="theory-note">Ogni salvataggio apre una NUOVA versione: il ciclo precedente resta per storico, i
+        nuovi calcoli usano sempre l'ultimo attivo — stesso principio della Distinta Base. I minuti sono per 1 unità
+        del prodotto padre; i minuti macchina + manodopera insieme sono la base su cui si assorbe l'overhead del
+        centro, i soli minuti manodopera sono la base su cui si calcola la manodopera diretta.</div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Crea versione</button></div>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Cicli di Lavorazione attivi</div>
+  <div class="card-body">
+    {% if routings %}
+    <table class="masterledger-table">
+      <thead><tr><th>Prodotto padre</th><th>Versione</th><th>Fasi</th><th>Centri coinvolti</th></tr></thead>
+      <tbody>
+        {% for r in routings %}
+        <tr>
+          <td class="mono fw-bold">{{ r.parent_material.code }} — {{ r.parent_material.description }}</td>
+          <td>v{{ r.version }}</td>
+          <td>{{ r.operations|length }}</td>
+          <td>{{ r.operations|map(attribute='work_center')|map(attribute='code')|unique|join(', ') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun ciclo di lavorazione ancora creato.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}

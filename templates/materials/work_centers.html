@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Centri di Lavoro{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-header">🏭 Nuovo Centro di Lavoro <span class="tx-code">CR01</span></div>
+  <div class="card-body">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        <div class="form-group"><label>Codice <span class="req">*</span></label><input type="text" name="code" required></div>
+        <div class="form-group"><label>Descrizione <span class="req">*</span></label><input type="text" name="description" required></div>
+        <div class="form-group">
+          <label>Centro di costo CO</label>
+          <select name="cost_center_id"><option value="">— nessuno —</option>
+            {% for cc in cost_centers %}<option value="{{ cc.id }}">{{ cc.code }} — {{ cc.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group"><label>Capacità pianificata (ore/mese) <span class="req">*</span></label>
+          <input type="number" step="0.01" min="0" name="capacity_hours_month" required></div>
+        <div class="form-group"><label>Tariffa oraria manodopera diretta (€/h)</label>
+          <input type="number" step="0.0001" min="0" name="hourly_rate_labor" placeholder="0"></div>
+      </div>
+      <div class="theory-note">La tariffa oraria di OVERHEAD non si inserisce qui: si calcola da sola come
+        pool mensile assegnato a questo centro (in "Pool Overhead Reparto") diviso la capacità pianificata sopra —
+        metodo SAP del centro di lavoro. La tariffa manodopera invece è un dato in ingresso (costo orario pieno
+        dell'operatore), perché la manodopera diretta non è un costo indiretto.</div>
+      <div class="btn-row"><button class="btn btn-primary" type="submit">Crea</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Centri di Lavoro</div>
+  <div class="card-body">
+    {% if centri %}
+    <table class="masterledger-table">
+      <thead><tr><th>Codice</th><th>Descrizione</th><th>Centro di costo</th>
+        <th style="width:150px;">Capacità (h/mese)</th><th style="width:150px;">Tariffa manodopera</th>
+        <th style="width:90px;">Attivo</th><th style="width:80px;"></th></tr></thead>
+      <tbody>
+        {% for c in centri %}
+        <tr>
+          <form method="POST" action="{{ url_for('materials.work_center_update', wc_id=c.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <td class="mono fw-bold">{{ c.code }}</td>
+          <td>{{ c.description }}</td>
+          <td>
+            <select name="cost_center_id"><option value="">— nessuno —</option>
+              {% for cc in cost_centers %}
+              <option value="{{ cc.id }}" {% if c.cost_center_id == cc.id %}selected{% endif %}>{{ cc.code }} — {{ cc.name }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><input type="number" step="0.01" min="0" name="capacity_hours_month" value="{{ c.capacity_hours_month }}" style="width:110px;"></td>
+          <td><input type="number" step="0.0001" min="0" name="hourly_rate_labor" value="{{ c.hourly_rate_labor }}" style="width:110px;"></td>
+          <td><input type="checkbox" name="active" value="1" {% if c.active %}checked{% endif %}></td>
+          <td><button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px;" type="submit">Salva</button></td>
+          </form>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessun centro di lavoro ancora creato.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
