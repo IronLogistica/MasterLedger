@@ -12,10 +12,7 @@ def upgrade():
     op.create_table('allocation_splits', sa.Column('id',sa.Integer(),primary_key=True),sa.Column('document_type',sa.String(30),nullable=False),sa.Column('document_id',sa.Integer(),nullable=False),sa.Column('document_line_id',sa.Integer(),nullable=True),sa.Column('cost_center_id',sa.Integer(),sa.ForeignKey('cost_centers.id'),nullable=False),sa.Column('percentage',sa.Numeric(5,2),nullable=False),sa.UniqueConstraint('document_type','document_id','document_line_id','cost_center_id',name='uq_allocation_split_target_center'))
     with op.batch_alter_table('payroll_account_configs', schema=None) as batch_op:
         for name in ('accrued_holiday_expense_account_id','accrued_permission_expense_account_id','accrued_thirteenth_expense_account_id','accrued_payable_account_id','tfr_expense_account_id','tfr_fund_account_id'):
-            fk_name = 'fk_pac_' + name
-            if len(fk_name) > 63:
-                fk_name = fk_name[:63]
-            batch_op.add_column(sa.Column(name,sa.Integer(),sa.ForeignKey('accounts.id', name=fk_name),nullable=True))
+            batch_op.add_column(sa.Column(name,sa.Integer(),sa.ForeignKey('accounts.id', name=f'fk_payroll_account_configs_{name}'),nullable=True))
 def downgrade():
     with op.batch_alter_table('payroll_account_configs', schema=None) as batch_op:
         for name in ('tfr_fund_account_id','tfr_expense_account_id','accrued_payable_account_id','accrued_thirteenth_expense_account_id','accrued_permission_expense_account_id','accrued_holiday_expense_account_id'):
