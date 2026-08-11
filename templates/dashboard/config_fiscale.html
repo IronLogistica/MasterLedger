@@ -9,7 +9,7 @@
       aggiorna qui: non serve toccare il codice dell'applicazione.
     </div>
 
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% for category, params in params_by_category.items() %}
         <div style="margin-bottom:20px;">
           <div style="font-size:12px; font-weight:700; text-transform:uppercase; color:var(--ml-label); margin-bottom:8px; border-bottom:1px solid var(--ml-border); padding-bottom:4px;">
@@ -37,7 +37,7 @@
       giacenza 999) e — solo se i campi sono ancora vuoti — un <strong>cedente di prova</strong>
       (P.IVA 12345678903). I dati reali già inseriti NON vengono toccati.
     </div>
-    <form method="POST" action="{{ url_for('dashboard.ambiente_test') }}">
+    <form method="POST" action="{{ url_for('dashboard.ambiente_test') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn btn-primary" type="submit">🧪 Prepara ambiente di test</button>
     </form>
     <div class="theory-note" style="margin-top:12px;">
