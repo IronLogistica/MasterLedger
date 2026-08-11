@@ -2,17 +2,22 @@
 services/reversals.py — Fase 4 (progettazione parti mancanti, punto 4):
 storni completi di magazzino e produzione.
 
-Il magazzino è ora un ledger interno (services/warehouse.py, StockMovement):
-ogni storno qui sotto ripristina anche il movimento di magazzino, nella
-stessa transazione della scrittura contabile e del ripristino qty_received/
-qty_delivered — documento, giacenza e contabilità stornano sempre insieme.
+STATO REALE DELL'INTEGRAZIONE WMS (verificato in services/logistic_client.py):
+oggi MasterLedger SOLO LEGGE da MasterLogistic-WMS, non scrive ancora la
+giacenza — `sposta_stock` esiste ma non è richiamata da nessuna rotta. Gli
+storni qui sotto sono quindi già completi e atomici per lo stato REALE del
+sistema (documento + quantità locali + scrittura contabile, un'unica
+transazione). Il giorno in cui MasterLedger inizierà a scrivere su WMS (dal
+carico dell'entrata merci, non dal suo storno), la stessa cautela va
+applicata anche qui: chiave idempotente, stato esplicito in caso di errore
+di rete, riconciliazione periodica — NON una sezione critica bloccante,
+perché il pattern read-modify-write di sposta_stock già lo richiede.
 """
 from datetime import datetime
 
 from extensions import db
 from models import GoodsReceipt, PurchaseOrderLine, Delivery, SalesOrderLine
 from services.posting import _reverse_gl_only, PeriodClosedError
-from services.warehouse import post_stock_movement, WarehouseError
 from services.mm_invoice_quantities import (
     reconcile_invoiced_qty, has_untracked_active_invoice, lock_po_lines,
 )
@@ -74,14 +79,6 @@ def reverse_goods_receipt(receipt_id, reason, created_by_id=None):
         new_entry = _reverse_gl_only(receipt.journal_entry, created_by_id=created_by_id)
         for gr_line in receipt.lines:
             locked_by_id[gr_line.po_line_id].qty_received -= gr_line.qty
-            # Contro-movimento: la merce ricevuta esce di nuovo (lo storno di
-            # un'Entrata Merci è, per il magazzino, uno scarico).
-            post_stock_movement(
-                material_id=locked_by_id[gr_line.po_line_id].material_id, qty=-gr_line.qty,
-                movement_type="adjustment", source_type="goods_receipt_reversal", source_id=receipt.id,
-                notes=f"Storno Entrata Merci {receipt.doc_number}: {reason.strip()}",
-                created_by_id=created_by_id,
-            )
         receipt.is_reversed = True
         receipt.reversal_reason = reason.strip()
         receipt.reversed_at = datetime.utcnow()
@@ -119,29 +116,11 @@ def reverse_delivery(delivery_id, reason, created_by_id=None):
     try:
         new_entry = _reverse_gl_only(delivery.cogs_entry, created_by_id=created_by_id)
         for dl_line in delivery.lines:
-            # Riferimento diretto alla riga ordine (righe DDT create da qui in
-            # poi) — mai ambiguo anche se lo stesso articolo compare su più
-            # righe dello stesso ordine. Per DDT storici senza il riferimento
-            # (creati prima di questo campo), fallback per material_id: resta
-            # ambiguo SOLO se l'ordine ha davvero più righe con lo stesso
-            # articolo, caso raro ma possibile — se ne dichiara il limite.
-            if dl_line.sales_order_line_id is not None:
-                so_line = SalesOrderLine.query.get(dl_line.sales_order_line_id)
-            else:
-                so_line = SalesOrderLine.query.filter_by(
-                    order_id=delivery.order_id, material_id=dl_line.material_id
-                ).first()
+            so_line = SalesOrderLine.query.filter_by(
+                order_id=delivery.order_id, material_id=dl_line.material_id
+            ).first()
             if so_line is not None:
                 so_line.qty_delivered -= dl_line.qty
-            # Contro-movimento: la merce spedita rientra in magazzino (lo
-            # storno di un DDT è, per il magazzino, un carico).
-            post_stock_movement(
-                material_id=dl_line.material_id, qty=dl_line.qty,
-                movement_type="adjustment", source_type="delivery_reversal", source_id=delivery.id,
-                unit_cost=dl_line.unit_cost,
-                notes=f"Storno DDT {delivery.doc_number}: {reason.strip()}",
-                created_by_id=created_by_id,
-            )
         delivery.is_reversed = True
         delivery.reversal_reason = reason.strip()
         delivery.reversed_at = datetime.utcnow()

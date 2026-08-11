@@ -195,31 +195,6 @@ def parse_ratei(payload):
     return {'period':period or '', 'payroll_period':period, 'employees':employees, 'provisional':True,
             'note':'INAIL puro è conservato per controllo e non viene rilevato come costo; ratei contabilizzabili: ferie, permessi, 13a e contribuzioni.'}
 
-def default_worker_inps(gross, deductions, cfg):
-    """Precompila (mai impone) la quota INPS a carico dipendente dentro le trattenute totali,
-    così in revisione resta solo da correggere l'importo esatto letto dal cedolino."""
-    gross=Decimal(str(gross)); deductions=Decimal(str(deductions))
-    if not cfg or not cfg.employee_inps_rate: return '0.00'
-    value=(gross*Decimal(str(cfg.employee_inps_rate))/100).quantize(Decimal('.01'),rounding=ROUND_HALF_UP)
-    return str(min(value,deductions))
-
-def default_employer_contribution(gross, cfg):
-    """Precompila (mai impone) gli oneri sociali a carico azienda: costo aggiuntivo
-    rispetto al lordo busta, mai presente nel totale competenze del cedolino."""
-    if not cfg or not cfg.employer_contribution_rate: return '0.00'
-    return str((Decimal(str(gross))*Decimal(str(cfg.employer_contribution_rate))/100).quantize(Decimal('.01'),rounding=ROUND_HALF_UP))
-
-def validate_payslip_breakdown(worker_inps, deductions, employer_contribution):
-    """La quota INPS dipendente è UNA PARTE delle trattenute già dedotte in busta (non un
-    importo aggiuntivo); gli oneri datoriali sono invece un costo aggiuntivo, mai visto
-    nel lordo busta. Nessuno dei due può essere negativo o inventato oltre il dato reale."""
-    try: worker_inps=Decimal(str(worker_inps or '0')); employer_contribution=Decimal(str(employer_contribution or '0'))
-    except InvalidOperation: raise ValueError('Importi INPS/oneri datoriali non validi.')
-    deductions=Decimal(str(deductions))
-    if worker_inps<0 or employer_contribution<0: raise ValueError('Gli importi INPS/oneri datoriali non possono essere negativi.')
-    if worker_inps>deductions+Decimal('.02'): raise ValueError('La quota INPS dipendente non può superare il totale delle trattenute in busta.')
-    return worker_inps.quantize(Decimal('.01')), employer_contribution.quantize(Decimal('.01'))
-
 def fingerprint(payload):return hashlib.sha256(payload).hexdigest()
 def ensure_config(config,fields):
     missing=[label for field,label in fields if not getattr(config,field,None)]
@@ -252,26 +227,14 @@ def post_import(import_row,reviewed,user_id):
     cfg=PayrollAccountConfig.query.first()
     if not cfg:raise ValueError('Configurazione conti paghe assente.')
     if import_row.document_kind=='PAYSLIP':
-        ensure_config(cfg,[('wage_expense_account','costo retribuzioni'),('net_salary_payable_account','debiti retribuzioni'),
-                            ('withholding_payable_account','debiti ritenute erariali'),('inps_payable_account','debiti INPS')]); lines=[]
-        any_employer_contribution=any(Decimal(str(x.get('employer_contribution','0') or '0'))>0 for x in reviewed['employees'])
-        if any_employer_contribution: ensure_config(cfg,[('employer_burden_account','costo oneri sociali datoriali')])
+        ensure_config(cfg,[('wage_expense_account','costo retribuzioni'),('net_salary_payable_account','debiti retribuzioni'),('withholding_payable_account','debiti ritenute')]); lines=[]
         for x in reviewed['employees']:
             gross,net,ded=(Decimal(str(x[k])) for k in ('gross','net','deductions'))
             if min(gross,net,ded)<0 or abs(gross-net-ded)>Decimal('.02'):raise ValueError('Busta non quadrata o con importo negativo.')
-            worker_inps,employer_contribution=validate_payslip_breakdown(x.get('worker_inps_contribution'),ded,x.get('employer_contribution'))
-            erario=ded-worker_inps  # resto trattenute: IRPEF e altre ritenute erariali, mai INPS
             splits=x.get('splits') or ([{'cost_center_id':x.get('cost_center_id'),'percentage':'100'}] if x.get('cost_center_id') else [])
             for cc,amount in allocate_percent(gross,splits): lines.append({'account_id':cfg.wage_expense_account_id,'dare':amount,'avere':0,'cost_center_id':cc,'description':x['name']})
             for cc,amount in allocate_percent(net,splits): lines.append({'account_id':cfg.net_salary_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'Netto '+x['name']})
-            if worker_inps>0:
-                for cc,amount in allocate_percent(worker_inps,splits): lines.append({'account_id':cfg.inps_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'INPS dipendente '+x['name']})
-            if erario>0:
-                for cc,amount in allocate_percent(erario,splits): lines.append({'account_id':cfg.withholding_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'Ritenute erariali '+x['name']})
-            if employer_contribution>0:
-                for cc,amount in allocate_percent(employer_contribution,splits):
-                    lines.append({'account_id':cfg.employer_burden_account_id,'dare':amount,'avere':0,'cost_center_id':cc,'description':'Oneri sociali azienda '+x['name']})
-                    lines.append({'account_id':cfg.inps_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'INPS azienda '+x['name']})
+            for cc,amount in allocate_percent(ded,splits): lines.append({'account_id':cfg.withholding_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'Trattenute '+x['name']})
         dt=date.today();desc='Accantonamento paghe '+reviewed.get('period','')
     elif import_row.document_kind=='RATEI':
         if reviewed.get('provisional') and not reviewed.get('provisional_confirmed'): raise ValueError('Rateo provvisorio: spuntare la conferma esplicita prima della contabilizzazione.')

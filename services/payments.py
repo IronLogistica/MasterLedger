@@ -161,18 +161,8 @@ def allocate_payment(payment_entry, allocations, created_by_id=None):
         inst.residual_amount = residual - richiesto
         inst.version += 1
         if inst.residual_amount <= 0:
-            # L'entry (fattura) può avere PIÙ rate (numero_rata 1, 2, 3...):
-            # non basta che QUESTA rata sia saldata, serve che lo siano TUTTE
-            # — altrimenti una fattura a 3 rate risulterebbe "pagata" (is_paid)
-            # non appena la prima si chiude, con le altre due ancora aperte.
-            altre_rate_aperte = (InvoiceInstallment.query
-                                 .filter(InvoiceInstallment.entry_id == inst.entry_id,
-                                         InvoiceInstallment.id != inst.id,
-                                         InvoiceInstallment.residual_amount > 0)
-                                 .first())
-            if altre_rate_aperte is None:
-                inst.entry.is_paid = True
-                inst.entry.paid_by_entry_id = payment_entry.id
+            inst.entry.is_paid = True
+            inst.entry.paid_by_entry_id = payment_entry.id
         db.session.add(inst)
 
         alloc = PaymentAllocation(
