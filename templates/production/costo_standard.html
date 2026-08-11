@@ -12,7 +12,7 @@
       capitalizza al consuntivo come sempre (nessuna varianza).
     </div>
 
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Prodotto Finito <span class="req">*</span></label>
@@ -53,7 +53,7 @@
           <td class="td-num">{{ '%.4f'|format(s.standard_overhead_cost) }}</td>
           <td class="td-num fw-bold">{{ '%.4f'|format(s.standard_total_unitario) }}</td>
           <td>
-            <form method="POST" action="{{ url_for('production.elimina_costo_standard', sc_id=s.id) }}" onsubmit="return confirm('Eliminare questo standard?');">
+            <form method="POST" action="{{ url_for('production.elimina_costo_standard', sc_id=s.id) }}" onsubmit="return confirm('Eliminare questo standard?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px;">🗑️</button>
             </form>
           </td>

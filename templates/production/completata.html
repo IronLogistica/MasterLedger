@@ -21,7 +21,7 @@
       e spalmalo in proporzione alla produzione del mese — è una stima ragionevole, non un costo unitario preciso.
     </div>
 
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid">
         <div class="form-group">
           <label>Prodotto Finito <span class="req">*</span></label>
