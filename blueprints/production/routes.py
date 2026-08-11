@@ -951,7 +951,7 @@ def completata():
 
             # Se il form ha usato "Calcola da distinta base", conosciamo ESATTAMENTE
             # quali componenti sono stati consumati e quanto — li scarichiamo
-            # davvero su MasterLogistic-WMS. Se l'importo è stato inserito a mano,
+            # davvero dal magazzino interno. Se l'importo è stato inserito a mano,
             # non sappiamo quali SKU scaricare: lo segnaliamo invece di indovinare.
             usa_bom = request.form.get("bom_usata") == "1"
             componenti_da_scaricare = []
