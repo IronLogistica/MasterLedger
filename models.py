@@ -916,10 +916,17 @@ class DeliveryLine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     delivery_id = db.Column(db.Integer, db.ForeignKey("deliveries.id"), nullable=False)
     material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
+    # Riga d'ordine di origine — nullable per compatibilità con righe storiche
+    # create prima di questo campo. Serve a ripristinare la riga ESATTA in
+    # caso di storno: senza questo riferimento, un ordine con lo stesso
+    # articolo su due righe (stesso SKU a prezzi diversi, nessun vincolo lo
+    # impedisce) renderebbe ambiguo quale riga decrementare allo storno.
+    sales_order_line_id = db.Column(db.Integer, db.ForeignKey("sales_order_lines.id"), nullable=True)
     qty = db.Column(db.Numeric(14, 3), nullable=False)
     price = db.Column(db.Numeric(14, 4), nullable=False)      # prezzo di vendita (dall'ordine)
     unit_cost = db.Column(db.Numeric(14, 4), nullable=False)  # costo standard AL MOMENTO del PGI
     material = db.relationship("Material")
+    sales_order_line = db.relationship("SalesOrderLine")
 
 
 # ══════════════════════════════════════════════════════════════
