@@ -374,151 +374,6 @@ class WarehouseArea(db.Model):
 
 
 # ══════════════════════════════════════════════════════════════
-# MAGAZZINO INTERNO — ledger movimenti + distinta base (sostituisce
-# l'integrazione in sola lettura verso MasterLogistic-WMS: qui non serve
-# nessun parser perché ordini cliente/fornitore vivono già come righe vere
-# in questo stesso database — SalesOrderLine/PurchaseOrderLine — non come
-# PDF da rileggere). Vedi services/warehouse.py per la logica.
-# ══════════════════════════════════════════════════════════════
-class StockMovement(db.Model):
-    """
-    Riga di ledger di magazzino: OGNI variazione di giacenza — carico da
-    Entrata Merci, scarico da DDT (PGI), prelievo/versamento produzione,
-    rettifica manuale — passa da qui. Material.qty_on_hand resta come
-    CACHE dell'ultimo saldo (per le query veloci nelle liste), ma la
-    fonte di verità per audit e riconciliazione è la somma di questi
-    movimenti — mai un PDF, mai un sistema esterno.
-    """
-    __tablename__ = "stock_movements"
-    id = db.Column(db.Integer, primary_key=True)
-    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
-    warehouse_area_id = db.Column(db.Integer, db.ForeignKey("warehouse_areas.id"), nullable=True)
-    qty = db.Column(db.Numeric(14, 3), nullable=False)          # + carico, - scarico
-    unit_cost = db.Column(db.Numeric(14, 4), nullable=True)     # valorizzazione al momento del movimento
-    movement_type = db.Column(db.String(20), nullable=False)    # delivery|goods_receipt|production_issue|production_receipt|adjustment
-    source_type = db.Column(db.String(30), nullable=True)       # 'delivery_line'|'goods_receipt_line'|'production_order'|'manual'
-    source_id = db.Column(db.Integer, nullable=True)            # id della riga/documento sorgente
-    doc_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
-    notes = db.Column(db.String(255))
-    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    material = db.relationship("Material")
-    warehouse_area = db.relationship("WarehouseArea")
-
-    @property
-    def total_value(self):
-        if self.unit_cost is None:
-            return None
-        return Decimal(str(self.qty)) * Decimal(str(self.unit_cost))
-
-
-class WorkCenter(db.Model):
-    """
-    Centro di lavoro (reparto fisico: taglio, foratura, assemblaggio,
-    confezionamento) — l'oggetto su cui si accumula il pool di overhead
-    (ProductionOverheadItem, tramite work_center_id) e attraverso cui il
-    Ciclo di Lavorazione (Routing) assorbe manodopera diretta + overhead nel
-    costo standard, sostituendo per gli articoli che hanno un ciclo attivo la
-    quota-fatturato approssimata di _calcola_overhead_da_fatturato.
-
-    hourly_rate_labor: tariffa oraria manodopera diretta, inserita a mano
-    (costo orario pieno dell'operatore, es. comprensivo di TFR/contributi) —
-    non calcolata dal pool, perché la manodopera diretta non è un costo
-    indiretto di reparto.
-
-    capacity_hours_month: ore pianificate/mese del centro, denominatore per
-    calcolare la tariffa oraria di overhead = pool del centro nel mese /
-    capacity_hours_month (metodo SAP del centro di lavoro).
-    """
-    __tablename__ = "work_centers"
-    id = db.Column(db.Integer, primary_key=True)
-    code = db.Column(db.String(20), unique=True, nullable=False)
-    description = db.Column(db.String(120), nullable=False)
-    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=True)
-    capacity_hours_month = db.Column(db.Numeric(10, 2), nullable=False, default=0)
-    hourly_rate_labor = db.Column(db.Numeric(10, 4), nullable=False, default=0)
-    active = db.Column(db.Boolean, default=True)
-
-    cost_center = db.relationship("CostCenter")
-
-
-class Routing(db.Model):
-    """
-    Ciclo di lavorazione di un articolo padre (HALB o FERT), a versione —
-    stesso principio di versionamento di BillOfMaterial: ogni modifica alle
-    fasi apre una nuova versione invece di sovrascrivere quella in uso.
-    """
-    __tablename__ = "routings"
-    id = db.Column(db.Integer, primary_key=True)
-    parent_material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
-    version = db.Column(db.String(10), nullable=False, default="1")
-    active = db.Column(db.Boolean, default=True)
-    notes = db.Column(db.String(255))
-    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    parent_material = db.relationship("Material", foreign_keys=[parent_material_id])
-    operations = db.relationship("RoutingOperation", backref="routing", cascade="all, delete-orphan",
-                                 order_by="RoutingOperation.seq")
-
-    __table_args__ = (db.UniqueConstraint("parent_material_id", "version", name="uq_routing_parent_version"),)
-
-
-class RoutingOperation(db.Model):
-    """Fase del ciclo: tempo standard macchina/manodopera per 1 unità del
-    padre, presso un centro di lavoro. seq in stile SAP (10, 20, 30...)."""
-    __tablename__ = "routing_operations"
-    id = db.Column(db.Integer, primary_key=True)
-    routing_id = db.Column(db.Integer, db.ForeignKey("routings.id"), nullable=False)
-    seq = db.Column(db.Integer, nullable=False, default=10)
-    work_center_id = db.Column(db.Integer, db.ForeignKey("work_centers.id"), nullable=False)
-    description = db.Column(db.String(200))
-    machine_time_min = db.Column(db.Numeric(10, 4), nullable=False, default=0)
-    labor_time_min = db.Column(db.Numeric(10, 4), nullable=False, default=0)
-
-    work_center = db.relationship("WorkCenter")
-
-    __table_args__ = (db.UniqueConstraint("routing_id", "seq", name="uq_routing_operation_seq"),)
-
-
-class BillOfMaterial(db.Model):
-    """
-    Distinta base di un articolo padre (HALB o FERT), a versione — sostituisce
-    la DistintaBase piatta di MasterLogistic-WMS con qualcosa di versionabile:
-    ogni modifica ai componenti apre una nuova versione invece di sovrascrivere
-    quella in uso (coerente con come funzionano già i Costi Standard per mese).
-    """
-    __tablename__ = "bill_of_materials"
-    id = db.Column(db.Integer, primary_key=True)
-    parent_material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
-    version = db.Column(db.String(10), nullable=False, default="1")
-    active = db.Column(db.Boolean, default=True)
-    notes = db.Column(db.String(255))
-    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    parent_material = db.relationship("Material", foreign_keys=[parent_material_id])
-    components = db.relationship("BOMComponent", backref="bom", cascade="all, delete-orphan")
-
-    __table_args__ = (db.UniqueConstraint("parent_material_id", "version", name="uq_bom_parent_version"),)
-
-
-class BOMComponent(db.Model):
-    __tablename__ = "bom_components"
-    id = db.Column(db.Integer, primary_key=True)
-    bom_id = db.Column(db.Integer, db.ForeignKey("bill_of_materials.id"), nullable=False)
-    component_material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
-    qty_per = db.Column(db.Numeric(14, 4), nullable=False)   # quantità componente per 1 unità di padre
-    scrap_pct = db.Column(db.Numeric(5, 2), nullable=False, default=0)  # % scarto fisiologico, applicato in explode_bom
-    notes = db.Column(db.String(255))
-
-    component_material = db.relationship("Material", foreign_keys=[component_material_id])
-
-    __table_args__ = (db.UniqueConstraint("bom_id", "component_material_id", name="uq_bom_component"),)
-
-
-# ══════════════════════════════════════════════════════════════
 # PARAMETRI FISCALI — pannello riservato al Commercialista
 # ══════════════════════════════════════════════════════════════
 class FiscalParameter(db.Model):
@@ -985,17 +840,10 @@ class DeliveryLine(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     delivery_id = db.Column(db.Integer, db.ForeignKey("deliveries.id"), nullable=False)
     material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False)
-    # Riga d'ordine di origine — nullable per compatibilità con righe storiche
-    # create prima di questo campo. Serve a ripristinare la riga ESATTA in
-    # caso di storno: senza questo riferimento, un ordine con lo stesso
-    # articolo su due righe (stesso SKU a prezzi diversi, nessun vincolo lo
-    # impedisce) renderebbe ambiguo quale riga decrementare allo storno.
-    sales_order_line_id = db.Column(db.Integer, db.ForeignKey("sales_order_lines.id"), nullable=True)
     qty = db.Column(db.Numeric(14, 3), nullable=False)
     price = db.Column(db.Numeric(14, 4), nullable=False)      # prezzo di vendita (dall'ordine)
     unit_cost = db.Column(db.Numeric(14, 4), nullable=False)  # costo standard AL MOMENTO del PGI
     material = db.relationship("Material")
-    sales_order_line = db.relationship("SalesOrderLine")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -1193,37 +1041,6 @@ class StandardCost(db.Model):
         return (self.standard_material_cost or 0) + (self.standard_labor_cost or 0) + (self.standard_overhead_cost or 0)
 
 
-class ProductCostTarget(db.Model):
-    """Costo obiettivo unitario, versionato per prodotto e data di decorrenza.
-
-    Non sovrascrive mai il target precedente: l'analisi sceglie l'ultima
-    versione valida alla data di fine del periodo, conservando la storia dei
-    budget e rendendo il confronto ripetibile in audit.
-    """
-    __tablename__ = "product_cost_targets"
-    id = db.Column(db.Integer, primary_key=True)
-    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
-    effective_date = db.Column(db.Date, nullable=False, index=True)
-    target_material_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)
-    target_labor_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)
-    target_overhead_cost = db.Column(db.Numeric(14, 4), nullable=False, default=0)
-    notes = db.Column(db.String(300))
-    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    material = db.relationship("Material")
-    created_by = db.relationship("User")
-
-    __table_args__ = (
-        db.UniqueConstraint("material_id", "effective_date", name="uq_product_cost_target_material_date"),
-    )
-
-    @property
-    def target_total_unitario(self):
-        return ((self.target_material_cost or 0) + (self.target_labor_cost or 0) +
-                (self.target_overhead_cost or 0))
-
-
 class ProductionOverheadItem(db.Model):
     """
     Voce singola del pool di costi indiretti di REPARTO (Livello 1: taglio,
@@ -1240,15 +1057,8 @@ class ProductionOverheadItem(db.Model):
     month = db.Column(db.Integer, nullable=False)   # 1-12
     description = db.Column(db.String(200), nullable=False)
     amount = db.Column(db.Numeric(14, 2), nullable=False, default=0)
-    # Centro di lavoro a cui è assegnata la voce — nullable per compatibilità
-    # con le voci storiche inserite prima del metodo SAP (routing_cost.py):
-    # quelle restano nel pool "non ripartito" e NON entrano nel calcolo
-    # tariffa oraria di nessun centro finché non vengono riassegnate.
-    work_center_id = db.Column(db.Integer, db.ForeignKey("work_centers.id"), nullable=True, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    work_center = db.relationship("WorkCenter")
 
 
 class OverheadAdjustment(db.Model):
@@ -1297,12 +1107,6 @@ class PayrollAccountConfig(db.Model):
     accrued_payable_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
     tfr_expense_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
     tfr_fund_account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
-    # Aliquote SOLO come comodo valore di precompilazione in revisione: l'importo
-    # che viene davvero registrato è sempre quello (eventualmente corretto a mano)
-    # visibile e modificabile riga per riga nella maschera di revisione — mai
-    # un'aliquota applicata alla cieca in fase di contabilizzazione.
-    employee_inps_rate = db.Column(db.Numeric(5, 2), nullable=True)      # es. 9.19 — quota INPS a carico dipendente, dentro le trattenute
-    employer_contribution_rate = db.Column(db.Numeric(5, 2), nullable=True)  # es. 30.00 — oneri INPS/INAIL a carico azienda, NON dentro il lordo busta
     wage_expense_account = db.relationship("Account", foreign_keys=[wage_expense_account_id])
     employer_burden_account = db.relationship("Account", foreign_keys=[employer_burden_account_id])
     net_salary_payable_account = db.relationship("Account", foreign_keys=[net_salary_payable_account_id])
