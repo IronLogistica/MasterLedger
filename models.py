@@ -470,6 +470,33 @@ class StorageLocation(db.Model):
         return self.TIPI_STOCCAGGIO.get(self.tipo_stoccaggio, self.tipo_stoccaggio)
 
 
+class MaterialLocationStock(db.Model):
+    """
+    Quanta giacenza di un articolo è assegnata a ciascuna ubicazione — DICE
+    DOVE si trova la merce che già risulta in Material.qty_on_hand, ma è un
+    tracciamento MANUALE, indipendente dal ledger di magazzino
+    (StockMovement): non genera né consuma movimenti, non si aggiorna da
+    sola quando arriva un'Entrata Merci o parte un DDT — va assegnata (o
+    riassegnata) a mano da chi mette fisicamente la merce a posto.
+
+    Vincolo applicato in fase di salvataggio (non nello schema): la somma
+    delle ubicazioni di un articolo non supera mai Material.qty_on_hand —
+    non ha senso assegnare più merce di quanta risulti in giacenza.
+    """
+    __tablename__ = "material_location_stocks"
+    id = db.Column(db.Integer, primary_key=True)
+    material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
+    storage_location_id = db.Column(db.Integer, db.ForeignKey("storage_locations.id"), nullable=False, index=True)
+    qty = db.Column(db.Numeric(14, 3), nullable=False, default=0)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+
+    material = db.relationship("Material")
+    storage_location = db.relationship("StorageLocation", backref="assegnazioni")
+
+    __table_args__ = (db.UniqueConstraint("material_id", "storage_location_id", name="uq_material_location"),)
+
+
 # ══════════════════════════════════════════════════════════════
 # MAGAZZINO INTERNO — ledger movimenti + distinta base (sostituisce
 # l'integrazione in sola lettura verso MasterLogistic-WMS: qui non serve
