@@ -253,3 +253,103 @@ def test_area_posiziona_rejects_zero_size_rectangle(login, app):
     assert r.status_code == 400
     with app.app_context():
         assert WarehouseArea.query.get(area_id).pos_x is None
+
+
+def _material(app, code="MAT-LOC-1", qty="100"):
+    from decimal import Decimal
+    from models import Material
+    with app.app_context():
+        m = Material.query.filter_by(code=code).first()
+        if m is None:
+            m = Material(code=code, description="Materiale test", material_type="ROH", qty_on_hand=Decimal(qty))
+            db.session.add(m); db.session.commit()
+        return m.id
+
+
+def test_assign_material_to_location_within_stock(login, app):
+    site_id = _site(app)
+    login.post("/warehouse/areas/new", data={
+        "site_id": site_id, "code": "ASS1", "name": "Assegna Test", "area_type": "ROH",
+        "usa_corsie": "1", "usa_scaffali": "1",
+    })
+    with app.app_context():
+        area_id = WarehouseArea.query.filter_by(code="ASS1").one().id
+    login.post(f"/warehouse/areas/{area_id}/ubicazioni/new", data={"corridoio": "01", "scaffale": "01"})
+    with app.app_context():
+        loc_id = StorageLocation.query.filter_by(warehouse_area_id=area_id).one().id
+    mat_id = _material(app, "MAT-LOC-1", "100")
+
+    r = login.post(f"/warehouse/ubicazioni/{loc_id}/assegna", data={"material_id": mat_id, "qty": "60"})
+    assert r.status_code == 302
+    with app.app_context():
+        from models import MaterialLocationStock
+        row = MaterialLocationStock.query.filter_by(material_id=mat_id, storage_location_id=loc_id).one()
+        assert str(row.qty) == "60.000"
+
+
+def test_assign_material_rejects_exceeding_total_stock(login, app):
+    site_id = _site(app)
+    login.post("/warehouse/areas/new", data={
+        "site_id": site_id, "code": "ASS2", "name": "Assegna Limite", "area_type": "ROH",
+        "usa_corsie": "1", "usa_scaffali": "1",
+    })
+    with app.app_context():
+        area_id = WarehouseArea.query.filter_by(code="ASS2").one().id
+    login.post(f"/warehouse/areas/{area_id}/ubicazioni/new", data={"corridoio": "01", "scaffale": "01"})
+    login.post(f"/warehouse/areas/{area_id}/ubicazioni/new", data={"corridoio": "01", "scaffale": "02"})
+    with app.app_context():
+        locs = StorageLocation.query.filter_by(warehouse_area_id=area_id).order_by(StorageLocation.codice).all()
+        loc1_id, loc2_id = locs[0].id, locs[1].id
+    mat_id = _material(app, "MAT-LOC-2", "50")
+
+    login.post(f"/warehouse/ubicazioni/{loc1_id}/assegna", data={"material_id": mat_id, "qty": "50"})
+    r = login.post(f"/warehouse/ubicazioni/{loc2_id}/assegna",
+                   data={"material_id": mat_id, "qty": "1"}, follow_redirects=True)
+    assert "Impossibile assegnare".encode() in r.data
+    with app.app_context():
+        from models import MaterialLocationStock
+        assert MaterialLocationStock.query.filter_by(storage_location_id=loc2_id).count() == 0
+
+
+def test_material_locations_page_shows_assignments_and_unplaced_remainder(login, app):
+    site_id = _site(app)
+    login.post("/warehouse/areas/new", data={
+        "site_id": site_id, "code": "ASS3", "name": "Dove Test", "area_type": "ROH",
+        "usa_corsie": "1", "usa_scaffali": "1",
+    })
+    with app.app_context():
+        area_id = WarehouseArea.query.filter_by(code="ASS3").one().id
+    login.post(f"/warehouse/areas/{area_id}/ubicazioni/new", data={"corridoio": "01", "scaffale": "01"})
+    with app.app_context():
+        loc_id = StorageLocation.query.filter_by(warehouse_area_id=area_id).one().id
+    mat_id = _material(app, "MAT-LOC-3", "100")
+    login.post(f"/warehouse/ubicazioni/{loc_id}/assegna", data={"material_id": mat_id, "qty": "30"})
+
+    r = login.get(f"/warehouse/materiali/{mat_id}/ubicazioni")
+    assert r.status_code == 200
+    assert b"ASS3" in r.data
+    assert b"30" in r.data
+    assert b"70" in r.data  # non ancora posizionato
+
+
+def test_qty_zero_removes_assignment(login, app):
+    site_id = _site(app)
+    login.post("/warehouse/areas/new", data={
+        "site_id": site_id, "code": "ASS4", "name": "Rimuovi Test", "area_type": "ROH",
+        "usa_corsie": "1", "usa_scaffali": "1",
+    })
+    with app.app_context():
+        area_id = WarehouseArea.query.filter_by(code="ASS4").one().id
+    login.post(f"/warehouse/areas/{area_id}/ubicazioni/new", data={"corridoio": "01", "scaffale": "01"})
+    with app.app_context():
+        loc_id = StorageLocation.query.filter_by(warehouse_area_id=area_id).one().id
+    mat_id = _material(app, "MAT-LOC-4", "50")
+
+    login.post(f"/warehouse/ubicazioni/{loc_id}/assegna", data={"material_id": mat_id, "qty": "20"})
+    with app.app_context():
+        from models import MaterialLocationStock
+        assert MaterialLocationStock.query.filter_by(storage_location_id=loc_id).count() == 1
+
+    login.post(f"/warehouse/ubicazioni/{loc_id}/assegna", data={"material_id": mat_id, "qty": "0"})
+    with app.app_context():
+        assert MaterialLocationStock.query.filter_by(storage_location_id=loc_id).count() == 0
