@@ -8,16 +8,63 @@
       <a href="{{ url_for('warehouse.setup') }}">Setup Magazzini</a>. Clicca un blocco per aprirne la gestione (struttura e ubicazioni).
     </div>
 
-    {% if not blocchi %}
+    {% if not site.ha_planimetria %}
+    <div class="theory-note" style="margin-bottom:14px;">
+      <strong>Carica la planimetria della ditta</strong> per disegnarci sopra i blocchi invece di inserire le coordinate a mano.
+      <form method="POST" action="{{ url_for('warehouse.floor_plan_upload', site_id=site.id) }}" enctype="multipart/form-data" style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="width" id="pf-width"><input type="hidden" name="height" id="pf-height">
+        <input type="file" name="planimetria" accept="image/png,image/jpeg" required id="pf-file">
+        <button type="submit" class="btn btn-primary">Carica planimetria</button>
+      </form>
+    </div>
+    <script>
+      document.getElementById('pf-file').addEventListener('change', function(e){
+        const file = e.target.files[0]; if(!file) return;
+        const img = new Image();
+        img.onload = function(){
+          document.getElementById('pf-width').value = img.naturalWidth;
+          document.getElementById('pf-height').value = img.naturalHeight;
+        };
+        img.src = URL.createObjectURL(file);
+      });
+    </script>
+    {% else %}
+    <div class="btn-row" style="margin-bottom:10px;">
+      <button type="button" class="btn btn-primary" id="btn-disegna" onclick="attivaDisegno()">✏️ Disegna un blocco sulla planimetria</button>
+      <form method="POST" action="{{ url_for('warehouse.floor_plan_remove', site_id=site.id) }}" style="display:inline;" onsubmit="return confirm('Rimuovere la planimetria? I blocchi già posizionati restano dove sono.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost">Rimuovi planimetria</button>
+      </form>
+    </div>
+    <div id="disegno-avviso" class="alert alert-warning" style="display:none; margin-bottom:10px;">
+      ✏️ Modalità disegno attiva — tieni premuto e trascina sulla planimetria per disegnare il rettangolo di un blocco, poi rilascia.
+    </div>
+    {% endif %}
+
+    {% set margine = 40 %}
+    {% if site.ha_planimetria %}
+      {% set base_w = site.floor_plan_width %}
+      {% set base_h = site.floor_plan_height %}
+    {% elif blocchi %}
+      {% set base_w = (blocchi | map(attribute='pos_x') | max) + (blocchi | map(attribute='dim_x') | max) %}
+      {% set base_h = (blocchi | map(attribute='pos_y') | max) + (blocchi | map(attribute='dim_y') | max) %}
+    {% else %}
+      {% set base_w = 0 %}
+      {% set base_h = 0 %}
+    {% endif %}
+
+    {% if not blocchi and not site.ha_planimetria %}
     <div class="empty-state">Nessun blocco ha ancora una posizione impostata su questa mappa.</div>
     {% else %}
-    {% set margine = 40 %}
-    {% set max_x = (blocchi | map(attribute='pos_x') | max) + (blocchi | map(attribute='dim_x') | max) %}
-    {% set max_y = (blocchi | map(attribute='pos_y') | max) + (blocchi | map(attribute='dim_y') | max) %}
-    <svg viewBox="0 0 {{ (max_x + margine * 2) | round(0, 'ceil') }} {{ (max_y + margine * 2) | round(0, 'ceil') }}"
-         style="width:100%; max-height:640px; background:var(--ml-bg); border:1px solid var(--ml-border); border-radius:6px;">
+    <svg id="mappa-svg" viewBox="0 0 {{ (base_w + margine * 2) | round(0, 'ceil') }} {{ (base_h + margine * 2) | round(0, 'ceil') }}"
+         style="width:100%; max-height:720px; background:var(--ml-bg); border:1px solid var(--ml-border); border-radius:6px; cursor:default;"
+         data-site-id="{{ site.id }}">
+      {% if site.ha_planimetria %}
+      <image href="{{ url_for('warehouse.floor_plan_image', site_id=site.id) }}" x="0" y="0" width="{{ base_w }}" height="{{ base_h }}"></image>
+      {% endif %}
       {% for b in blocchi %}
-      <a href="{{ url_for('warehouse.area_detail', area_id=b.id) }}">
+      <a href="{{ url_for('warehouse.area_detail', area_id=b.id) }}" class="blocco-link">
         <rect x="{{ b.pos_x }}" y="{{ b.pos_y }}" width="{{ b.dim_x }}" height="{{ b.dim_y }}"
               fill="{{ colori.get(b.area_type, '#666') }}" fill-opacity="0.35" stroke="{{ colori.get(b.area_type, '#666') }}" stroke-width="2" rx="4">
           <title>{{ b.code }} — {{ b.name }} ({{ b.area_type_label }})</title>
@@ -26,6 +73,7 @@
               fill="var(--ml-text)" font-size="{{ [b.dim_x, b.dim_y] | min / 6 }}" font-family="monospace">{{ b.code }}</text>
       </a>
       {% endfor %}
+      <rect id="rett-disegno" x="0" y="0" width="0" height="0" fill="#3b82c4" fill-opacity="0.3" stroke="#3b82c4" stroke-width="2" stroke-dasharray="6,4" style="display:none;"></rect>
     </svg>
     <div style="margin-top:10px; display:flex; gap:14px; flex-wrap:wrap; font-size:12px;">
       {% for code, label in area_types.items() %}
@@ -39,6 +87,100 @@
       Blocchi senza posizione (non compaiono sulla mappa): {% for a in non_posizionati %}<a href="{{ url_for('warehouse.area_detail', area_id=a.id) }}">{{ a.code }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
     </div>
     {% endif %}
+
+    <div id="scelta-blocco" style="display:none; margin-top:14px;" class="card">
+      <div class="card-body">
+        <label>A quale blocco (senza posizione) corrisponde il rettangolo appena disegnato?</label>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <select id="select-blocco-da-posizionare" style="flex:1;">
+            <option value="">— seleziona —</option>
+            {% for a in non_posizionati %}<option value="{{ a.id }}">{{ a.code }} — {{ a.name }}</option>{% endfor %}
+          </select>
+          <button type="button" class="btn btn-primary" onclick="confermaPosizione()">Conferma posizione</button>
+          <button type="button" class="btn btn-ghost" onclick="annullaDisegno()">Annulla</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
+{% endblock %}
+{% block scripts %}
+<script>
+let disegnoAttivo = false, disegnando = false, startX = 0, startY = 0, ultimoRettangolo = null;
+const svg = document.getElementById('mappa-svg');
+
+function attivaDisegno() {
+  disegnoAttivo = true;
+  document.getElementById('disegno-avviso').style.display = '';
+  document.getElementById('btn-disegna').textContent = '✏️ Modalità disegno attiva — clicca fuori per annullare';
+  svg.style.cursor = 'crosshair';
+  document.querySelectorAll('.blocco-link').forEach(el => el.style.pointerEvents = 'none');
+}
+
+function disattivaDisegno() {
+  disegnoAttivo = false;
+  document.getElementById('disegno-avviso').style.display = 'none';
+  const btn = document.getElementById('btn-disegna');
+  if (btn) btn.textContent = '✏️ Disegna un blocco sulla planimetria';
+  svg.style.cursor = 'default';
+  document.querySelectorAll('.blocco-link').forEach(el => el.style.pointerEvents = '');
+}
+
+function coordinateSvg(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
+  return { x: loc.x, y: loc.y };
+}
+
+if (svg) {
+  svg.addEventListener('mousedown', function(e) {
+    if (!disegnoAttivo) return;
+    disegnando = true;
+    const c = coordinateSvg(e);
+    startX = c.x; startY = c.y;
+    const r = document.getElementById('rett-disegno');
+    r.setAttribute('x', startX); r.setAttribute('y', startY);
+    r.setAttribute('width', 0); r.setAttribute('height', 0);
+    r.style.display = '';
+  });
+  svg.addEventListener('mousemove', function(e) {
+    if (!disegnando) return;
+    const c = coordinateSvg(e);
+    const r = document.getElementById('rett-disegno');
+    r.setAttribute('x', Math.min(startX, c.x)); r.setAttribute('y', Math.min(startY, c.y));
+    r.setAttribute('width', Math.abs(c.x - startX)); r.setAttribute('height', Math.abs(c.y - startY));
+  });
+  svg.addEventListener('mouseup', function(e) {
+    if (!disegnando) return;
+    disegnando = false;
+    const r = document.getElementById('rett-disegno');
+    const w = parseFloat(r.getAttribute('width')), h = parseFloat(r.getAttribute('height'));
+    if (w < 5 || h < 5) { r.style.display = 'none'; return; }
+    ultimoRettangolo = { x: parseFloat(r.getAttribute('x')), y: parseFloat(r.getAttribute('y')), w, h };
+    document.getElementById('scelta-blocco').style.display = '';
+    disattivaDisegno();
+  });
+}
+
+function annullaDisegno() {
+  document.getElementById('rett-disegno').style.display = 'none';
+  document.getElementById('scelta-blocco').style.display = 'none';
+  ultimoRettangolo = null;
+}
+
+async function confermaPosizione() {
+  const areaId = document.getElementById('select-blocco-da-posizionare').value;
+  if (!areaId || !ultimoRettangolo) { alert('Seleziona un blocco.'); return; }
+  const csrf = document.querySelector('input[name="csrf_token"]').value;
+  const body = new URLSearchParams({
+    csrf_token: csrf, pos_x: ultimoRettangolo.x, pos_y: ultimoRettangolo.y,
+    dim_x: ultimoRettangolo.w, dim_y: ultimoRettangolo.h,
+  });
+  const resp = await fetch(`/warehouse/areas/${areaId}/posiziona`, { method: 'POST', body });
+  const data = await resp.json();
+  if (!data.ok) { alert(data.error || 'Errore.'); return; }
+  window.location.reload();
+}
+</script>
 {% endblock %}
