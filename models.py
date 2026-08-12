@@ -342,6 +342,13 @@ class WarehouseArea(db.Model):
     Magazzini" richiesto: definisce nome, tipo e soprattutto il conto G/L
     di magazzino a cui l'area è collegata, per studiare lo stoccaggio
     corretto (materie prime vs prodotti finiti vs blocco qualità, ecc.)
+
+    Ogni area ("blocco") ha la SUA struttura di stoccaggio, attivabile in
+    modo indipendente dalle altre (usa_*): un'area a terra non ha scaffali
+    né cantilever, un magazzino verticale sì — il form di creazione
+    ubicazione mostra e richiede solo i campi che l'area ha attivato.
+    pos_x/pos_y/dim_x/dim_y posizionano il blocco sulla mappa a schermo
+    della sede operativa (coordinate/ingombro liberi, non un'unità fissa).
     """
     __tablename__ = "warehouse_areas"
 
@@ -366,11 +373,89 @@ class WarehouseArea(db.Model):
 
     active = db.Column(db.Boolean, default=True)
 
+    pos_x = db.Column(db.Float, nullable=True)
+    pos_y = db.Column(db.Float, nullable=True)
+    dim_x = db.Column(db.Float, nullable=True)
+    dim_y = db.Column(db.Float, nullable=True)
+
+    usa_corsie = db.Column(db.Boolean, nullable=False, default=True)
+    usa_scaffali = db.Column(db.Boolean, nullable=False, default=True)
+    usa_ripiani = db.Column(db.Boolean, nullable=False, default=True)
+    usa_cassette = db.Column(db.Boolean, nullable=False, default=False)
+    usa_cantilever = db.Column(db.Boolean, nullable=False, default=False)
+    area_a_terra = db.Column(db.Boolean, nullable=False, default=False)
+
     __table_args__ = (db.UniqueConstraint("site_id", "code", name="uq_site_sloc_code"),)
 
     @property
     def area_type_label(self):
         return self.AREA_TYPES.get(self.area_type, self.area_type)
+
+    @property
+    def ha_mappa_posizionata(self):
+        return None not in (self.pos_x, self.pos_y, self.dim_x, self.dim_y)
+
+
+class StorageLocation(db.Model):
+    """
+    Ubicazione granulare dentro un'Area di Magazzino ("blocco") — corsia,
+    scaffale, ripiano, cassetta: SOLO i livelli che quel blocco ha attivato
+    (WarehouseArea.usa_*), mai un campo obbligatorio che il blocco non usa.
+    Il codice è univoco all'interno del blocco (non serve essere univoco
+    globalmente: il codice completo, per chi legge, è sempre
+    SEDE-BLOCCO-codice, es. 2000-ROH1-C03-S12-L02).
+
+    pos_x/pos_y/dim_x/dim_y posizionano l'ubicazione sulla mappa a schermo
+    DI QUEL BLOCCO — coordinate locali al blocco, indipendenti dalla
+    posizione del blocco stesso sulla mappa della sede.
+    """
+    __tablename__ = "storage_locations"
+
+    TIPI_STOCCAGGIO = {
+        "SCAFFALE": "Scaffale",
+        "CANTILEVER": "Cantilever",
+        "AREA_TERRA": "Area a terra",
+        "PALLET": "Postazione pallet",
+    }
+    STATI = {
+        "libero": "Libero",
+        "occupato": "Occupato",
+        "manutenzione": "In manutenzione",
+        "bloccato": "Bloccato",
+    }
+
+    id = db.Column(db.Integer, primary_key=True)
+    warehouse_area_id = db.Column(db.Integer, db.ForeignKey("warehouse_areas.id"), nullable=False, index=True)
+    codice = db.Column(db.String(40), nullable=False)
+    corridoio = db.Column(db.String(10))
+    scaffale = db.Column(db.String(10))
+    ripiano = db.Column(db.String(10))
+    cassetta = db.Column(db.String(10))
+    tipo_stoccaggio = db.Column(db.String(20), nullable=False, default="SCAFFALE")
+    stato = db.Column(db.String(20), nullable=False, default="libero")
+
+    pos_x = db.Column(db.Float, nullable=False, default=0)
+    pos_y = db.Column(db.Float, nullable=False, default=0)
+    dim_x = db.Column(db.Float, nullable=False, default=100)
+    dim_y = db.Column(db.Float, nullable=False, default=100)
+    peso_max_kg = db.Column(db.Float, nullable=True)
+
+    note = db.Column(db.String(255))
+    active = db.Column(db.Boolean, default=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    warehouse_area = db.relationship("WarehouseArea", backref="storage_locations")
+
+    __table_args__ = (db.UniqueConstraint("warehouse_area_id", "codice", name="uq_storage_location_codice"),)
+
+    @property
+    def stato_label(self):
+        return self.STATI.get(self.stato, self.stato)
+
+    @property
+    def tipo_label(self):
+        return self.TIPI_STOCCAGGIO.get(self.tipo_stoccaggio, self.tipo_stoccaggio)
 
 
 # ══════════════════════════════════════════════════════════════
