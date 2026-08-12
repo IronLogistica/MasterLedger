@@ -19,7 +19,8 @@
         {% for p in sites %}
         <tr>
           <td class="mono">{{ p.code }}</td><td>{{ p.name }}</td><td>{{ p.city }}</td><td>{{ p.region }}</td><td class="mono">{{ p.company_code }}</td>
-          <td>
+          <td style="white-space:nowrap;">
+            <a class="btn btn-ghost" style="padding:2px 8px; font-size:11px;" href="{{ url_for('warehouse.site_map', site_id=p.id) }}">🗺️ mappa</a>
             <form method="POST" action="{{ url_for('warehouse.site_delete', site_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa sede operativa?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
             </form>
@@ -43,7 +44,7 @@
     <!-- ── STORAGE LOCATION ── -->
     <div style="font-size:13px; font-weight:700; margin:26px 0 8px;">Area di magazzino — Ubicazioni di Magazzino</div>
     <table class="masterledger-table" style="margin-bottom:12px;">
-      <thead><tr><th>Sede operativa</th><th>Codice</th><th>Nome Area</th><th>Tipo</th><th>Conto Magazzino (G/L)</th><th></th></tr></thead>
+      <thead><tr><th>Sede operativa</th><th>Codice</th><th>Nome Area</th><th>Tipo</th><th>Conto Magazzino (G/L)</th><th>Struttura</th><th></th></tr></thead>
       <tbody>
         {% for p in sites %}
           {% for s in p.warehouse_areas %}
@@ -51,7 +52,12 @@
             <td class="mono">{{ p.code }}</td><td class="mono">{{ s.code }}</td><td>{{ s.name }}</td>
             <td>{{ s.area_type_label }}</td>
             <td class="mono">{{ (s.account.code + ' — ' + s.account.name) if s.account else 'nessuno (transito)' }}</td>
-            <td>
+            <td style="font-size:11.5px;">
+              {% if s.area_a_terra %}<span class="badge">Area a terra</span>
+              {% else %}{{ 'Corsie ' if s.usa_corsie }}{{ 'Scaffali ' if s.usa_scaffali }}{{ 'Ripiani ' if s.usa_ripiani }}{{ 'Cassette ' if s.usa_cassette }}{{ 'Cantilever' if s.usa_cantilever }}{% endif %}
+            </td>
+            <td style="white-space:nowrap;">
+              <a class="btn btn-ghost" style="padding:2px 8px; font-size:11px;" href="{{ url_for('warehouse.area_detail', area_id=s.id) }}">⚙️ gestisci</a>
               <form method="POST" action="{{ url_for('warehouse.area_delete', sloc_id=s.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa ubicazione?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
               </form>
@@ -79,6 +85,24 @@
           </select>
         </div>
       </div>
+      <div class="theory-note" style="margin:10px 0;">
+        <strong>Struttura del blocco</strong> — attiva solo i livelli che questo blocco usa davvero (indipendente dagli altri blocchi):
+        <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:8px;">
+          <label><input type="checkbox" name="usa_corsie" value="1" checked> Corsie</label>
+          <label><input type="checkbox" name="usa_scaffali" value="1" checked> Scaffali</label>
+          <label><input type="checkbox" name="usa_ripiani" value="1" checked> Ripiani (livelli altezza)</label>
+          <label><input type="checkbox" name="usa_cassette" value="1"> Cassette (sotto-ubicazione)</label>
+          <label><input type="checkbox" name="usa_cantilever" value="1"> Cantilever</label>
+          <label><input type="checkbox" name="area_a_terra" value="1"> Area a terra (nessuna scaffalatura — disattiva gli altri)</label>
+        </div>
+      </div>
+      <div class="form-grid" style="margin-top:8px;">
+        <div class="form-group"><label>Posizione X sulla mappa sede</label><input type="number" step="0.01" name="pos_x" placeholder="opzionale"></div>
+        <div class="form-group"><label>Posizione Y sulla mappa sede</label><input type="number" step="0.01" name="pos_y" placeholder="opzionale"></div>
+        <div class="form-group"><label>Ingombro X (larghezza)</label><input type="number" step="0.01" name="dim_x" placeholder="opzionale"></div>
+        <div class="form-group"><label>Ingombro Y (profondità)</label><input type="number" step="0.01" name="dim_y" placeholder="opzionale"></div>
+      </div>
+      <p class="theory-note">Posizione/ingombro sono opzionali: lasciali vuoti se non ti serve vedere questo blocco sulla mappa della sede — puoi impostarli in qualsiasi momento da "gestisci".</p>
       <div class="btn-row"><button type="submit" class="btn btn-primary">➕ Crea area di magazzino</button></div>
     </form>
   </div>

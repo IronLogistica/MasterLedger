@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">⚙️ Blocco {{ area.code }} — {{ area.name }} <span class="tx-code">{{ area.area_type_label }}</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Sede: <a href="{{ url_for('warehouse.site_map', site_id=area.site_id) }}">{{ area.site.code }} — {{ area.site.name }}</a> ·
+      Conto: <span class="mono">{{ (area.account.code + ' — ' + area.account.name) if area.account else 'nessuno (transito)' }}</span>
+    </div>
+
+    <div style="font-size:13px; font-weight:700; margin:14px 0 8px;">Struttura di questo blocco</div>
+    <form method="POST" action="{{ url_for('warehouse.area_struttura', area_id=area.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:10px;">
+        <label><input type="checkbox" name="usa_corsie" value="1" {{ 'checked' if area.usa_corsie }}> Corsie</label>
+        <label><input type="checkbox" name="usa_scaffali" value="1" {{ 'checked' if area.usa_scaffali }}> Scaffali</label>
+        <label><input type="checkbox" name="usa_ripiani" value="1" {{ 'checked' if area.usa_ripiani }}> Ripiani (livelli altezza)</label>
+        <label><input type="checkbox" name="usa_cassette" value="1" {{ 'checked' if area.usa_cassette }}> Cassette (sotto-ubicazione)</label>
+        <label><input type="checkbox" name="usa_cantilever" value="1" {{ 'checked' if area.usa_cantilever }}> Cantilever</label>
+        <label><input type="checkbox" name="area_a_terra" value="1" {{ 'checked' if area.area_a_terra }}> Area a terra (disattiva gli altri)</label>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label>Posizione X sulla mappa sede</label><input type="number" step="0.01" name="pos_x" value="{{ area.pos_x if area.pos_x is not none else '' }}"></div>
+        <div class="form-group"><label>Posizione Y sulla mappa sede</label><input type="number" step="0.01" name="pos_y" value="{{ area.pos_y if area.pos_y is not none else '' }}"></div>
+        <div class="form-group"><label>Ingombro X (larghezza)</label><input type="number" step="0.01" name="dim_x" value="{{ area.dim_x if area.dim_x is not none else '' }}"></div>
+        <div class="form-group"><label>Ingombro Y (profondità)</label><input type="number" step="0.01" name="dim_y" value="{{ area.dim_y if area.dim_y is not none else '' }}"></div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">Salva struttura</button></div>
+    </form>
+  </div>
+</div>
+
+{% if not area.area_a_terra %}
+<div class="card">
+  <div class="card-header">📐 Genera ubicazioni a griglia</div>
+  <div class="card-body">
+    <p class="theory-note">Crea in automatico una griglia di ubicazioni (corsie × scaffali{{ ' × ripiani' if area.usa_ripiani }}), posizionate in sequenza sulla mappa. Le singole ubicazioni restano poi modificabili o eliminabili una per una — non è un vincolo permanente.</p>
+    <form method="POST" action="{{ url_for('warehouse.location_genera_griglia', area_id=area.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        {% if area.usa_corsie %}<div class="form-group"><label>N. corsie</label><input type="number" name="n_corsie" min="1" value="3"></div>{% endif %}
+        {% if area.usa_scaffali %}<div class="form-group"><label>N. scaffali per corsia</label><input type="number" name="n_scaffali" min="1" value="5"></div>{% endif %}
+        {% if area.usa_ripiani %}<div class="form-group"><label>N. ripiani</label><input type="number" name="n_ripiani" min="1" value="4"></div>{% endif %}
+        <div class="form-group"><label>Larghezza scaffale</label><input type="number" step="0.01" name="larghezza" value="120"></div>
+        <div class="form-group"><label>Profondità scaffale</label><input type="number" step="0.01" name="profondita" value="80"></div>
+        <div class="form-group"><label>Larghezza corridoio</label><input type="number" step="0.01" name="corridoio_larghezza" value="150"></div>
+      </div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">📐 Genera griglia</button></div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header">➕ Nuova ubicazione</div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('warehouse.location_new', area_id=area.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid">
+        {% if area.area_a_terra %}
+        <div class="form-group"><label>Posizione <span class="req">*</span></label><input type="text" name="posizione_libera" placeholder="es. P01" required></div>
+        {% else %}
+        {% if area.usa_corsie %}<div class="form-group"><label>Corridoio</label><input type="text" name="corridoio" placeholder="es. 03"></div>{% endif %}
+        {% if area.usa_scaffali %}<div class="form-group"><label>Scaffale</label><input type="text" name="scaffale" placeholder="es. 12"></div>{% endif %}
+        {% if area.usa_ripiani %}<div class="form-group"><label>Ripiano</label><input type="text" name="ripiano" placeholder="es. 02"></div>{% endif %}
+        {% if area.usa_cassette %}<div class="form-group"><label>Cassetta</label><input type="text" name="cassetta" placeholder="es. A1"></div>{% endif %}
+        {% endif %}
+        <div class="form-group">
+          <label>Tipo stoccaggio</label>
+          <select name="tipo_stoccaggio">
+            {% if area.area_a_terra %}
+            <option value="AREA_TERRA">Area a terra</option>
+            <option value="PALLET">Postazione pallet</option>
+            {% else %}
+            <option value="SCAFFALE">Scaffale</option>
+            {% if area.usa_cantilever %}<option value="CANTILEVER">Cantilever</option>{% endif %}
+            {% endif %}
+          </select>
+        </div>
+        <div class="form-group"><label>Peso max (kg)</label><input type="number" step="0.01" name="peso_max_kg" placeholder="opzionale"></div>
+      </div>
+      <div class="form-grid" style="margin-top:6px;">
+        <div class="form-group"><label>Posizione X sulla mappa del blocco</label><input type="number" step="0.01" name="pos_x" value="0"></div>
+        <div class="form-group"><label>Posizione Y sulla mappa del blocco</label><input type="number" step="0.01" name="pos_y" value="0"></div>
+        <div class="form-group"><label>Ingombro X</label><input type="number" step="0.01" name="dim_x" value="100"></div>
+        <div class="form-group"><label>Ingombro Y</label><input type="number" step="0.01" name="dim_y" value="100"></div>
+      </div>
+      <div class="form-group" style="margin-top:6px;"><label>Note</label><input type="text" name="note"></div>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">➕ Crea ubicazione</button></div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">🗺️ Mappa del blocco</div>
+  <div class="card-body">
+    {% if not ubicazioni %}
+    <div class="empty-state">Nessuna ubicazione ancora creata in questo blocco.</div>
+    {% else %}
+    {% set margine = 20 %}
+    {% set max_x = (ubicazioni | map(attribute='pos_x') | max) + (ubicazioni | map(attribute='dim_x') | max) %}
+    {% set max_y = (ubicazioni | map(attribute='pos_y') | max) + (ubicazioni | map(attribute='dim_y') | max) %}
+    <svg viewBox="0 0 {{ (max_x + margine * 2) | round(0, 'ceil') }} {{ (max_y + margine * 2) | round(0, 'ceil') }}"
+         style="width:100%; max-height:560px; background:var(--ml-bg); border:1px solid var(--ml-border); border-radius:6px;">
+      {% for u in ubicazioni %}
+      <rect x="{{ u.pos_x }}" y="{{ u.pos_y }}" width="{{ u.dim_x }}" height="{{ u.dim_y }}"
+            fill="{{ colori.get(u.stato, '#666') }}" fill-opacity="0.35" stroke="{{ colori.get(u.stato, '#666') }}" stroke-width="2" rx="3">
+        <title>{{ u.codice }} — {{ u.tipo_label }} — {{ u.stato_label }}</title>
+      </rect>
+      <text x="{{ u.pos_x + u.dim_x / 2 }}" y="{{ u.pos_y + u.dim_y / 2 }}" text-anchor="middle" dominant-baseline="middle"
+            fill="var(--ml-text)" font-size="{{ [u.dim_x, u.dim_y] | min / 5 }}" font-family="monospace">{{ u.codice }}</text>
+      {% endfor %}
+    </svg>
+    <div style="margin-top:10px; display:flex; gap:14px; flex-wrap:wrap; font-size:12px;">
+      {% for code, label in stati.items() %}
+      <span><span style="display:inline-block;width:10px;height:10px;background:{{ colori.get(code,'#666') }};border-radius:2px;margin-right:4px;"></span>{{ label }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">📋 Ubicazioni del blocco</div>
+  <div class="card-body">
+    {% if ubicazioni %}
+    <table class="masterledger-table">
+      <thead><tr><th>Codice</th><th>Tipo</th><th>Stato</th><th class="td-num">Peso max</th><th>Note</th><th></th></tr></thead>
+      <tbody>
+        {% for u in ubicazioni %}
+        <tr>
+          <td class="mono fw-bold">{{ u.codice }}</td>
+          <td>{{ u.tipo_label }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('warehouse.location_stato', loc_id=u.id) }}" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <select name="stato" onchange="this.form.submit()">
+                {% for code, label in stati.items() %}<option value="{{ code }}" {{ 'selected' if u.stato==code }}>{{ label }}</option>{% endfor %}
+              </select>
+            </form>
+          </td>
+          <td class="td-num">{{ u.peso_max_kg or '—' }}</td>
+          <td>{{ u.note or '—' }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('warehouse.location_delete', loc_id=u.id) }}" style="display:inline;" onsubmit="return confirm('Eliminare questa ubicazione?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-ghost" style="padding:2px 8px; font-size:11px;">rimuovi</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<div class="empty-state">Nessuna ubicazione ancora creata.</div>{% endif %}
+  </div>
+</div>
+{% endblock %}
