@@ -1,5 +1,6 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file
 from flask_login import login_required, current_user
+import io
 
 from extensions import db
 from models import OperatingSite, WarehouseArea, StorageLocation, Account
@@ -76,6 +77,90 @@ def site_delete(site_id):
     db.session.commit()
     flash(f"Sede operativa {site.code} eliminata.", "info")
     return redirect(url_for("warehouse.setup"))
+
+
+@warehouse_bp.route("/sites/<int:site_id>/planimetria/carica", methods=["POST"])
+@login_required
+def floor_plan_upload(site_id):
+    """Carica la planimetria della sede — SOLO in memoria/database, mai su
+    disco (il filesystem del container non è persistente). Accetta PNG o
+    JPEG, verificati dai byte magici (stesso principio già usato per i PDF
+    paghe: mai fidarsi solo dell'estensione del nome file)."""
+    site = OperatingSite.query.get_or_404(site_id)
+    f = request.files.get("planimetria")
+    if not f or not f.filename:
+        flash("Seleziona un file immagine.", "danger")
+        return redirect(url_for("warehouse.site_map", site_id=site_id))
+
+    payload = f.read()
+    if payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        mimetype = "image/png"
+    elif payload.startswith(b"\xff\xd8\xff"):
+        mimetype = "image/jpeg"
+    else:
+        flash("Formato non riconosciuto — carica un PNG o un JPEG.", "danger")
+        return redirect(url_for("warehouse.site_map", site_id=site_id))
+    if len(payload) > 8 * 1024 * 1024:
+        flash("Immagine troppo grande (limite 8MB) — comprimila prima di caricarla.", "danger")
+        return redirect(url_for("warehouse.site_map", site_id=site_id))
+
+    def _float(name):
+        v = request.form.get(name, "").strip()
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+
+    site.floor_plan_image = payload
+    site.floor_plan_mimetype = mimetype
+    # Dimensioni naturali lette dal browser (JS, prima dell'invio) — evita di
+    # aggiungere una dipendenza server solo per leggere l'header dell'immagine.
+    site.floor_plan_width = _float("width") or 1000
+    site.floor_plan_height = _float("height") or 700
+    db.session.commit()
+    flash("Planimetria caricata.", "success")
+    return redirect(url_for("warehouse.site_map", site_id=site_id))
+
+
+@warehouse_bp.route("/sites/<int:site_id>/planimetria/immagine")
+@login_required
+def floor_plan_image(site_id):
+    site = OperatingSite.query.get_or_404(site_id)
+    if not site.ha_planimetria:
+        return "", 404
+    return send_file(io.BytesIO(site.floor_plan_image), mimetype=site.floor_plan_mimetype)
+
+
+@warehouse_bp.route("/sites/<int:site_id>/planimetria/rimuovi", methods=["POST"])
+@login_required
+def floor_plan_remove(site_id):
+    site = OperatingSite.query.get_or_404(site_id)
+    site.floor_plan_image = None
+    site.floor_plan_mimetype = None
+    site.floor_plan_width = None
+    site.floor_plan_height = None
+    db.session.commit()
+    flash("Planimetria rimossa.", "info")
+    return redirect(url_for("warehouse.site_map", site_id=site_id))
+
+
+@warehouse_bp.route("/areas/<int:area_id>/posiziona", methods=["POST"])
+@login_required
+def area_posiziona(area_id):
+    """Endpoint minimale usato dal disegno a schermo: aggiorna SOLO
+    posizione/ingombro del blocco (mai la struttura), così disegnare un
+    rettangolo non rischia di azzerare per sbaglio i toggle già impostati."""
+    area = WarehouseArea.query.get_or_404(area_id)
+    try:
+        pos_x = float(request.form["pos_x"]); pos_y = float(request.form["pos_y"])
+        dim_x = float(request.form["dim_x"]); dim_y = float(request.form["dim_y"])
+    except (KeyError, ValueError):
+        return jsonify({"ok": False, "error": "Coordinate non valide."}), 400
+    if dim_x <= 0 or dim_y <= 0:
+        return jsonify({"ok": False, "error": "Il rettangolo disegnato è troppo piccolo."}), 400
+    area.pos_x, area.pos_y, area.dim_x, area.dim_y = pos_x, pos_y, dim_x, dim_y
+    db.session.commit()
+    return jsonify({"ok": True, "code": area.code})
 
 
 @warehouse_bp.route("/sites/<int:site_id>/mappa")
