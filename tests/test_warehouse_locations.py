@@ -1,5 +1,6 @@
 """Test del sistema di ubicazioni granulari (corsia/scaffale/ripiano/cassetta)
 e delle mappe a schermo per Setup Magazzini."""
+import re
 from extensions import db
 from models import OperatingSite, WarehouseArea, StorageLocation
 
@@ -164,8 +165,91 @@ def test_area_without_position_excluded_from_site_map(login, app):
     })
     r = login.get(f"/warehouse/sites/{site_id}/mappa")
     assert r.status_code == 200
-    # NOPOS non deve mai comparire come blocco POSIZIONATO sulla mappa (dentro
-    # un <rect>/<title> — solo nell'elenco testuale "senza posizione" in fondo).
-    assert b"NOPOS \xe2\x80\x94" not in r.data  # "NOPOS —" è come appare nel <title> di un rect posizionato
+    # NOPOS non deve mai comparire dentro un <title> (che decora solo i
+    # blocchi POSIZIONATI, dentro un <rect>) — può legittimamente comparire
+    # altrove in pagina (es. nell'elenco "senza posizione" o nel menu a
+    # tendina per assegnargli un rettangolo appena disegnato).
+    titoli = re.findall(r"<title>([^<]+)</title>", r.data.decode())
+    assert not any("NOPOS" in t for t in titoli)
     assert b"Blocchi senza posizione" in r.data
     assert b"NOPOS" in r.data
+
+
+def _png_bytes():
+    import base64
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+
+
+def test_floor_plan_upload_serve_and_remove(login, app):
+    import io
+    site_id = _site(app)
+    r = login.post(f"/warehouse/sites/{site_id}/planimetria/carica", data={
+        "planimetria": (io.BytesIO(_png_bytes()), "pianta.png"), "width": "1000", "height": "600",
+    }, content_type="multipart/form-data")
+    assert r.status_code == 302
+    with app.app_context():
+        site = OperatingSite.query.get(site_id)
+        assert site.ha_planimetria is True
+        assert site.floor_plan_mimetype == "image/png"
+        assert site.floor_plan_width == 1000.0
+
+    r2 = login.get(f"/warehouse/sites/{site_id}/planimetria/immagine")
+    assert r2.status_code == 200
+    assert r2.content_type == "image/png"
+    assert len(r2.data) > 0
+
+    r3 = login.get(f"/warehouse/sites/{site_id}/mappa")
+    assert b"<image" in r3.data
+
+    login.post(f"/warehouse/sites/{site_id}/planimetria/rimuovi", data={})
+    with app.app_context():
+        assert OperatingSite.query.get(site_id).ha_planimetria is False
+
+
+def test_floor_plan_upload_rejects_non_image(login, app):
+    import io
+    site_id = _site(app)
+    r = login.post(f"/warehouse/sites/{site_id}/planimetria/carica", data={
+        "planimetria": (io.BytesIO(b"questo non e' un'immagine"), "finta.png"),
+    }, content_type="multipart/form-data", follow_redirects=True)
+    assert "non riconosciuto".encode() in r.data
+    with app.app_context():
+        assert OperatingSite.query.get(site_id).ha_planimetria is False
+
+
+def test_area_posiziona_updates_only_position_not_structure(login, app):
+    site_id = _site(app)
+    login.post("/warehouse/areas/new", data={
+        "site_id": site_id, "code": "POS1", "name": "Posiziona Test", "area_type": "ROH",
+        "usa_corsie": "1", "usa_scaffali": "1", "usa_cassette": "1",
+    })
+    with app.app_context():
+        area_id = WarehouseArea.query.filter_by(code="POS1").one().id
+
+    r = login.post(f"/warehouse/areas/{area_id}/posiziona",
+                   data={"pos_x": "10", "pos_y": "20", "dim_x": "150", "dim_y": "90"})
+    assert r.status_code == 200
+    assert r.get_json()["ok"] is True
+    with app.app_context():
+        area = WarehouseArea.query.get(area_id)
+        assert (area.pos_x, area.pos_y, area.dim_x, area.dim_y) == (10.0, 20.0, 150.0, 90.0)
+        # La struttura non viene toccata dal posizionamento via disegno
+        assert area.usa_corsie is True and area.usa_scaffali is True and area.usa_cassette is True
+
+
+def test_area_posiziona_rejects_zero_size_rectangle(login, app):
+    site_id = _site(app)
+    login.post("/warehouse/areas/new", data={
+        "site_id": site_id, "code": "POS2", "name": "Posiziona Zero", "area_type": "ROH",
+        "usa_corsie": "1",
+    })
+    with app.app_context():
+        area_id = WarehouseArea.query.filter_by(code="POS2").one().id
+
+    r = login.post(f"/warehouse/areas/{area_id}/posiziona",
+                   data={"pos_x": "0", "pos_y": "0", "dim_x": "0", "dim_y": "0"})
+    assert r.status_code == 400
+    with app.app_context():
+        assert WarehouseArea.query.get(area_id).pos_x is None
