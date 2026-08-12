@@ -1,9 +1,10 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify, send_file
 from flask_login import login_required, current_user
+from decimal import Decimal, InvalidOperation
 import io
 
 from extensions import db
-from models import OperatingSite, WarehouseArea, StorageLocation, Account
+from models import OperatingSite, WarehouseArea, StorageLocation, MaterialLocationStock, Account, Material
 
 warehouse_bp = Blueprint("warehouse", __name__, template_folder="../../templates/warehouse")
 
@@ -267,13 +268,15 @@ def area_struttura(area_id):
 @login_required
 def area_detail(area_id):
     """Pagina di gestione di UN blocco: struttura attivabile indipendente,
-    ubicazioni al suo interno, mappa a schermo delle sue ubicazioni."""
+    ubicazioni al suo interno, mappa a schermo delle sue ubicazioni, e
+    cosa (quale articolo, quanto) è assegnato a ciascuna ubicazione."""
     area = WarehouseArea.query.get_or_404(area_id)
     ubicazioni = (StorageLocation.query.filter_by(warehouse_area_id=area.id, active=True)
                  .order_by(StorageLocation.codice).all())
+    materiali = Material.query.filter_by(active=True).order_by(Material.code).all()
     return render_template("warehouse/area_detail.html", area=area, ubicazioni=ubicazioni,
                            colori=COLORE_PER_STATO, stati=StorageLocation.STATI,
-                           tipi=StorageLocation.TIPI_STOCCAGGIO)
+                           tipi=StorageLocation.TIPI_STOCCAGGIO, materiali=materiali)
 
 
 def _componi_codice(area, corridoio, scaffale, ripiano, cassetta, posizione_libera):
@@ -424,3 +427,68 @@ def location_genera_griglia(area_id):
         msg += f" {saltati} già esistenti, saltate."
     flash(msg, "success")
     return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+
+@warehouse_bp.route("/ubicazioni/<int:loc_id>/assegna", methods=["POST"])
+@login_required
+def location_assegna_articolo(loc_id):
+    """Assegna (o azzera, con quantità 0) quanta giacenza di UN articolo si
+    trova in QUESTA ubicazione. Manuale e indipendente dal ledger — vedi
+    MaterialLocationStock. La somma di tutte le ubicazioni dell'articolo
+    non può mai superare la sua giacenza totale (Material.qty_on_hand)."""
+    loc = StorageLocation.query.get_or_404(loc_id)
+    material = Material.query.get(request.form.get("material_id", type=int))
+    if material is None:
+        flash("Seleziona un articolo valido.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+    try:
+        qty = Decimal(request.form.get("qty", "0").strip().replace(",", "."))
+    except InvalidOperation:
+        flash("Quantità non valida.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+    if qty < 0:
+        flash("La quantità non può essere negativa.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+
+    altrove = (db.session.query(db.func.coalesce(db.func.sum(MaterialLocationStock.qty), 0))
+              .filter(MaterialLocationStock.material_id == material.id,
+                      MaterialLocationStock.storage_location_id != loc.id).scalar())
+    altrove = Decimal(str(altrove))
+    giacenza_totale = Decimal(str(material.qty_on_hand or 0))
+    if altrove + qty > giacenza_totale:
+        assegnabile_qui = max(Decimal("0"), giacenza_totale - altrove)
+        flash(f"Impossibile assegnare {qty} di {material.code} a {loc.codice}: la giacenza totale è "
+              f"{giacenza_totale}, già {altrove} assegnati in altre ubicazioni — qui puoi assegnarne "
+              f"al massimo {assegnabile_qui}.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+
+    row = MaterialLocationStock.query.filter_by(material_id=material.id, storage_location_id=loc.id).first()
+    if qty == 0:
+        if row is not None:
+            db.session.delete(row)
+        flash(f"{material.code} rimosso da {loc.codice}.", "info")
+    else:
+        if row is None:
+            row = MaterialLocationStock(material_id=material.id, storage_location_id=loc.id)
+            db.session.add(row)
+        row.qty = qty
+        row.updated_by_id = current_user.id
+        flash(f"{material.code}: {qty} assegnati a {loc.codice}.", "success")
+    db.session.commit()
+    return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+
+
+@warehouse_bp.route("/materiali/<int:material_id>/ubicazioni")
+@login_required
+def material_locations(material_id):
+    """'Dove si trova' — tutte le ubicazioni a cui è assegnato questo
+    articolo, e quanto risulta ancora non posizionato (giacenza totale
+    meno la somma di quanto assegnato)."""
+    material = Material.query.get_or_404(material_id)
+    assegnazioni = (MaterialLocationStock.query.filter_by(material_id=material.id)
+                    .join(StorageLocation).order_by(StorageLocation.codice).all())
+    totale_assegnato = sum((a.qty for a in assegnazioni), Decimal("0"))
+    non_posizionato = Decimal(str(material.qty_on_hand or 0)) - totale_assegnato
+    return render_template("warehouse/material_locations.html", material=material,
+                           assegnazioni=assegnazioni, totale_assegnato=totale_assegnato,
+                           non_posizionato=non_posizionato)
