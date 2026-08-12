@@ -1,8 +1,8 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash
-from flask_login import login_required
+from flask import Blueprint, render_template, request, redirect, url_for, flash, jsonify
+from flask_login import login_required, current_user
 
 from extensions import db
-from models import OperatingSite, WarehouseArea, Account
+from models import OperatingSite, WarehouseArea, StorageLocation, Account
 
 warehouse_bp = Blueprint("warehouse", __name__, template_folder="../../templates/warehouse")
 
@@ -18,6 +18,21 @@ DEFAULT_ACCOUNT_BY_TYPE = {
     "SCRAP": "590000",  # Perdite su Magazzino (Scarti)
     "TRANS": None,       # Area di transito — nessun conto proprio
 }
+
+# Colori usati sulla mappa a schermo, per tipo di blocco / stato ubicazione —
+# stessa palette del resto dell'app (var CSS), niente hardcoded fuori posto.
+COLORE_PER_AREA_TYPE = {
+    "ROH": "#3b82c4", "FERT": "#2a9d5c", "HALB": "#c9973b",
+    "QUAL": "#b8860b", "SCRAP": "#c0392b", "TRANS": "#666",
+}
+COLORE_PER_STATO = {
+    "libero": "#2a9d5c", "occupato": "#c0392b",
+    "manutenzione": "#c9973b", "bloccato": "#666",
+}
+
+
+def _toggle_bool(form, name):
+    return form.get(name) == "1"
 
 
 @warehouse_bp.route("/")
@@ -63,6 +78,20 @@ def site_delete(site_id):
     return redirect(url_for("warehouse.setup"))
 
 
+@warehouse_bp.route("/sites/<int:site_id>/mappa")
+@login_required
+def site_map(site_id):
+    """Mappa a schermo della sede: ogni Area di Magazzino ("blocco") come
+    rettangolo colorato per tipo, posizionato secondo pos_x/pos_y/dim_x/dim_y.
+    Solo i blocchi con posizione impostata compaiono sulla mappa."""
+    site = OperatingSite.query.get_or_404(site_id)
+    blocchi = [a for a in site.warehouse_areas if a.ha_mappa_posizionata]
+    non_posizionati = [a for a in site.warehouse_areas if not a.ha_mappa_posizionata]
+    return render_template("warehouse/site_map.html", site=site, blocchi=blocchi,
+                           non_posizionati=non_posizionati, colori=COLORE_PER_AREA_TYPE,
+                           area_types=WarehouseArea.AREA_TYPES)
+
+
 @warehouse_bp.route("/areas/new", methods=["POST"])
 @login_required
 def area_new():
@@ -82,9 +111,26 @@ def area_new():
     account_code = DEFAULT_ACCOUNT_BY_TYPE.get(area_type)
     account = Account.query.filter_by(code=account_code).first() if account_code else None
 
+    def _float(name):
+        v = request.form.get(name, "").strip().replace(",", ".")
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+
+    area_a_terra = _toggle_bool(request.form, "area_a_terra")
     sloc = WarehouseArea(
         site_id=site_id, code=code, name=name or f"Ubicazione {code}",
         area_type=area_type, account_id=account.id if account else None,
+        pos_x=_float("pos_x"), pos_y=_float("pos_y"), dim_x=_float("dim_x"), dim_y=_float("dim_y"),
+        # Un'area a terra, per definizione, non ha corsie/scaffali/ripiani/cantilever
+        # propri — sono mutuamente esclusivi, non serve che l'utente li spenga a mano.
+        usa_corsie=False if area_a_terra else _toggle_bool(request.form, "usa_corsie"),
+        usa_scaffali=False if area_a_terra else _toggle_bool(request.form, "usa_scaffali"),
+        usa_ripiani=False if area_a_terra else _toggle_bool(request.form, "usa_ripiani"),
+        usa_cassette=_toggle_bool(request.form, "usa_cassette"),
+        usa_cantilever=False if area_a_terra else _toggle_bool(request.form, "usa_cantilever"),
+        area_a_terra=area_a_terra,
     )
     db.session.add(sloc)
     db.session.commit()
@@ -102,3 +148,194 @@ def area_delete(sloc_id):
     db.session.commit()
     flash("Area di magazzino eliminata.", "info")
     return redirect(url_for("warehouse.setup"))
+
+
+@warehouse_bp.route("/areas/<int:area_id>/struttura", methods=["POST"])
+@login_required
+def area_struttura(area_id):
+    """Aggiorna, in modo indipendente per QUESTO blocco, quali livelli di
+    ubicazione usa e la sua posizione/ingombro sulla mappa della sede."""
+    area = WarehouseArea.query.get_or_404(area_id)
+
+    def _float(name):
+        v = request.form.get(name, "").strip().replace(",", ".")
+        try:
+            return float(v) if v else None
+        except ValueError:
+            return None
+
+    area_a_terra = _toggle_bool(request.form, "area_a_terra")
+    area.area_a_terra = area_a_terra
+    area.usa_corsie = False if area_a_terra else _toggle_bool(request.form, "usa_corsie")
+    area.usa_scaffali = False if area_a_terra else _toggle_bool(request.form, "usa_scaffali")
+    area.usa_ripiani = False if area_a_terra else _toggle_bool(request.form, "usa_ripiani")
+    area.usa_cassette = _toggle_bool(request.form, "usa_cassette")
+    area.usa_cantilever = False if area_a_terra else _toggle_bool(request.form, "usa_cantilever")
+    area.pos_x, area.pos_y = _float("pos_x"), _float("pos_y")
+    area.dim_x, area.dim_y = _float("dim_x"), _float("dim_y")
+    db.session.commit()
+    flash(f"Struttura del blocco {area.code} aggiornata.", "success")
+    return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+
+@warehouse_bp.route("/areas/<int:area_id>")
+@login_required
+def area_detail(area_id):
+    """Pagina di gestione di UN blocco: struttura attivabile indipendente,
+    ubicazioni al suo interno, mappa a schermo delle sue ubicazioni."""
+    area = WarehouseArea.query.get_or_404(area_id)
+    ubicazioni = (StorageLocation.query.filter_by(warehouse_area_id=area.id, active=True)
+                 .order_by(StorageLocation.codice).all())
+    return render_template("warehouse/area_detail.html", area=area, ubicazioni=ubicazioni,
+                           colori=COLORE_PER_STATO, stati=StorageLocation.STATI,
+                           tipi=StorageLocation.TIPI_STOCCAGGIO)
+
+
+def _componi_codice(area, corridoio, scaffale, ripiano, cassetta, posizione_libera):
+    if area.area_a_terra:
+        return posizione_libera.strip().upper() or "P01"
+    parti = []
+    if area.usa_corsie and corridoio:
+        parti.append(f"C{corridoio.strip().upper()}")
+    if area.usa_scaffali and scaffale:
+        parti.append(f"S{scaffale.strip().upper()}")
+    if area.usa_ripiani and ripiano:
+        parti.append(f"L{ripiano.strip().upper()}")
+    if area.usa_cassette and cassetta:
+        parti.append(f"K{cassetta.strip().upper()}")
+    return "-".join(parti)
+
+
+@warehouse_bp.route("/areas/<int:area_id>/ubicazioni/new", methods=["POST"])
+@login_required
+def location_new(area_id):
+    area = WarehouseArea.query.get_or_404(area_id)
+
+    corridoio = request.form.get("corridoio", "").strip()
+    scaffale = request.form.get("scaffale", "").strip()
+    ripiano = request.form.get("ripiano", "").strip()
+    cassetta = request.form.get("cassetta", "").strip()
+    posizione_libera = request.form.get("posizione_libera", "").strip()
+    tipo_stoccaggio = request.form.get("tipo_stoccaggio", "SCAFFALE")
+
+    # Un blocco accetta solo i tipi di stoccaggio coerenti con la SUA
+    # struttura — mai un cantilever in un blocco che non lo prevede.
+    if tipo_stoccaggio == "CANTILEVER" and not area.usa_cantilever:
+        flash(f"Il blocco {area.code} non ha attivato lo stoccaggio a cantilever — attivalo prima nella struttura.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+    if area.area_a_terra and tipo_stoccaggio not in ("AREA_TERRA", "PALLET"):
+        flash(f"Il blocco {area.code} è un'area a terra: solo tipo 'Area a terra' o 'Postazione pallet'.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+    codice = _componi_codice(area, corridoio, scaffale, ripiano, cassetta, posizione_libera)
+    if not codice:
+        flash("Compila almeno un livello di posizione attivo per questo blocco (o la posizione, per un'area a terra).", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+    if StorageLocation.query.filter_by(warehouse_area_id=area.id, codice=codice).first():
+        flash(f"L'ubicazione {codice} esiste già in questo blocco.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+    def _float(name, default):
+        v = request.form.get(name, "").strip().replace(",", ".")
+        try:
+            return float(v) if v else default
+        except ValueError:
+            return default
+
+    loc = StorageLocation(
+        warehouse_area_id=area.id, codice=codice,
+        corridoio=corridoio or None, scaffale=scaffale or None,
+        ripiano=ripiano or None, cassetta=cassetta or None,
+        tipo_stoccaggio=tipo_stoccaggio, stato=request.form.get("stato", "libero"),
+        pos_x=_float("pos_x", 0), pos_y=_float("pos_y", 0),
+        dim_x=_float("dim_x", 100), dim_y=_float("dim_y", 100),
+        peso_max_kg=_float("peso_max_kg", None),
+        note=request.form.get("note", "").strip() or None,
+        created_by_id=current_user.id,
+    )
+    db.session.add(loc)
+    db.session.commit()
+    flash(f"Ubicazione {codice} creata nel blocco {area.code}.", "success")
+    return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+
+@warehouse_bp.route("/ubicazioni/<int:loc_id>/stato", methods=["POST"])
+@login_required
+def location_stato(loc_id):
+    loc = StorageLocation.query.get_or_404(loc_id)
+    nuovo_stato = request.form.get("stato", "")
+    if nuovo_stato not in StorageLocation.STATI:
+        flash("Stato non valido.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+    loc.stato = nuovo_stato
+    db.session.commit()
+    flash(f"Ubicazione {loc.codice} → {loc.stato_label}.", "success")
+    return redirect(url_for("warehouse.area_detail", area_id=loc.warehouse_area_id))
+
+
+@warehouse_bp.route("/ubicazioni/<int:loc_id>/delete", methods=["POST"])
+@login_required
+def location_delete(loc_id):
+    loc = StorageLocation.query.get_or_404(loc_id)
+    area_id = loc.warehouse_area_id
+    db.session.delete(loc)
+    db.session.commit()
+    flash("Ubicazione eliminata.", "info")
+    return redirect(url_for("warehouse.area_detail", area_id=area_id))
+
+
+@warehouse_bp.route("/areas/<int:area_id>/ubicazioni/genera-griglia", methods=["POST"])
+@login_required
+def location_genera_griglia(area_id):
+    """Genera in automatico una griglia di ubicazioni (corsie x scaffali x
+    ripiani), posizionandole in sequenza sulla mappa del blocco — comodo per
+    partire, MAI obbligatorio: le singole ubicazioni restano poi modificabili
+    o eliminabili una per una."""
+    area = WarehouseArea.query.get_or_404(area_id)
+    if area.area_a_terra:
+        flash("La generazione a griglia è per blocchi a scaffalatura — un'area a terra si popola a mano (posizioni libere).", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+    try:
+        n_corsie = max(1, int(request.form.get("n_corsie", "1")))
+        n_scaffali = max(1, int(request.form.get("n_scaffali", "1")))
+        n_ripiani = max(1, int(request.form.get("n_ripiani", "1"))) if area.usa_ripiani else 1
+        larghezza = float(request.form.get("larghezza", "100").replace(",", "."))
+        profondita = float(request.form.get("profondita", "80").replace(",", "."))
+        corridoio_larghezza = float(request.form.get("corridoio_larghezza", "150").replace(",", "."))
+    except ValueError:
+        flash("Valori numerici non validi per la griglia.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+    if n_corsie * n_scaffali * n_ripiani > 500:
+        flash("Griglia troppo grande in un colpo solo (limite 500 ubicazioni) — generane una parte, poi ripeti.", "danger")
+        return redirect(url_for("warehouse.area_detail", area_id=area.id))
+
+    creati, saltati = 0, 0
+    for c in range(1, n_corsie + 1):
+        x_base = c * (profondita + corridoio_larghezza)
+        for s in range(1, n_scaffali + 1):
+            y_base = s * (larghezza + 20.0)
+            for r in range(1, n_ripiani + 1):
+                corridoio = f"{c:02d}"
+                scaffale = f"{s:02d}"
+                ripiano = f"{r:02d}" if area.usa_ripiani else None
+                codice = _componi_codice(area, corridoio, scaffale, ripiano, "", "")
+                if StorageLocation.query.filter_by(warehouse_area_id=area.id, codice=codice).first():
+                    saltati += 1
+                    continue
+                db.session.add(StorageLocation(
+                    warehouse_area_id=area.id, codice=codice,
+                    corridoio=corridoio if area.usa_corsie else None,
+                    scaffale=scaffale if area.usa_scaffali else None,
+                    ripiano=ripiano, tipo_stoccaggio="SCAFFALE", stato="libero",
+                    pos_x=x_base, pos_y=y_base, dim_x=profondita, dim_y=larghezza,
+                    created_by_id=current_user.id,
+                ))
+                creati += 1
+    db.session.commit()
+    msg = f"Griglia generata: {creati} ubicazioni create."
+    if saltati:
+        msg += f" {saltati} già esistenti, saltate."
+    flash(msg, "success")
+    return redirect(url_for("warehouse.area_detail", area_id=area.id))
