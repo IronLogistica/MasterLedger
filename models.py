@@ -333,7 +333,19 @@ class OperatingSite(db.Model):
     company_code = db.Column(db.String(4), default="1000")
     active = db.Column(db.Boolean, default=True)
 
+    # Planimetria della sede, per disegnarci sopra i blocchi (WarehouseArea)
+    # posizionati — bytes nel database, MAI su disco (coerente con tutto il
+    # resto dell'app: il filesystem del container non è persistente).
+    floor_plan_image = db.Column(db.LargeBinary, nullable=True)
+    floor_plan_mimetype = db.Column(db.String(50), nullable=True)
+    floor_plan_width = db.Column(db.Float, nullable=True)
+    floor_plan_height = db.Column(db.Float, nullable=True)
+
     warehouse_areas = db.relationship("WarehouseArea", backref="site", cascade="all, delete-orphan")
+
+    @property
+    def ha_planimetria(self):
+        return self.floor_plan_image is not None
 
 
 class WarehouseArea(db.Model):
