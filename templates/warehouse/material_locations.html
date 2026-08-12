@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">📍 Dove si trova — {{ material.code }} <span class="tx-code">{{ material.description }}</span></div>
+  <div class="card-body">
+    <div class="info-box">
+      Giacenza totale: <b>{{ material.qty_on_hand }}</b> · Assegnato a ubicazioni: <b>{{ totale_assegnato }}</b> ·
+      {% if non_posizionato > 0 %}<span style="color:var(--ml-orange);">Non ancora posizionato: <b>{{ non_posizionato }}</b></span>
+      {% else %}<span style="color:var(--ml-green);">Tutta la giacenza è posizionata.</span>{% endif %}
+    </div>
+    {% if assegnazioni %}
+    <table class="masterledger-table">
+      <thead><tr><th>Ubicazione</th><th>Blocco</th><th>Sede</th><th class="td-num">Quantità</th></tr></thead>
+      <tbody>
+        {% for a in assegnazioni %}
+        <tr>
+          <td class="mono fw-bold"><a href="{{ url_for('warehouse.area_detail', area_id=a.storage_location.warehouse_area_id) }}">{{ a.storage_location.codice }}</a></td>
+          <td>{{ a.storage_location.warehouse_area.code }} — {{ a.storage_location.warehouse_area.name }}</td>
+          <td>{{ a.storage_location.warehouse_area.site.code }} — {{ a.storage_location.warehouse_area.site.name }}</td>
+          <td class="td-num">{{ a.qty }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">Questo articolo non è ancora assegnato a nessuna ubicazione. Vai su un blocco (Setup Magazzini → gestisci) per assegnarlo.</div>
+    {% endif %}
+    <div class="btn-row" style="margin-top:12px;"><a class="btn btn-ghost" href="{{ url_for('logistics.magazzino') }}">← Torna a Magazzino / Fabbisogno</a></div>
+  </div>
+</div>
+{% endblock %}
