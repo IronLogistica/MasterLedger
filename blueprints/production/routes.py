@@ -21,7 +21,7 @@ riceverà i tre importi in automatico invece che a mano — la struttura
 contabile sotto NON cambia.
 """
 from datetime import datetime, date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import calendar
 
 from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify
@@ -915,9 +915,19 @@ def completata():
 
         try:
             qty_produced = Decimal(str(request.form.get("qty_produced", "0")).replace(",", "."))
-            raw_cost = Decimal(str(request.form.get("raw_material_cost", "0")).replace(",", "."))
-            labor_cost = Decimal(str(request.form.get("direct_labor_cost", "0")).replace(",", "."))
-            overhead_cost = Decimal(str(request.form.get("overhead_cost", "0")).replace(",", "."))
+            # Importi in euro: arrotondati al centesimo SUBITO, all'ingresso —
+            # come altrove nel modulo Cespiti (asset_create). Senza questo,
+            # un valore inserito con più di 2 decimali (es. incollato da un
+            # foglio di calcolo) resta a precisione arbitraria fino alla
+            # scrittura contabile, dove può disallineare dare/avere di 1
+            # centesimo (vedi nota sotto su std_mat/std_lab/std_oh per lo
+            # stesso problema sul ramo a costo standard).
+            raw_cost = Decimal(str(request.form.get("raw_material_cost", "0")).replace(",", ".")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+            labor_cost = Decimal(str(request.form.get("direct_labor_cost", "0")).replace(",", ".")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
+            overhead_cost = Decimal(str(request.form.get("overhead_cost", "0")).replace(",", ".")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP)
         except Exception:
             flash("Controlla i valori numerici inseriti (quantità e importi).", "danger")
             return redirect(url_for("production.completata"))
@@ -977,9 +987,26 @@ def completata():
 
             if standard is not None:
                 # ── Capitalizzazione ALLO STANDARD + varianze sul consuntivo ──
-                std_mat = standard.standard_material_cost * qty_produced
-                std_lab = standard.standard_labor_cost * qty_produced
-                std_oh = standard.standard_overhead_cost * qty_produced
+                # BUG REALE (trovato in audit, riproducibile): con qty_produced
+                # a più di 2 decimali (kg, litri...), standard.standard_X_cost *
+                # qty_produced ha più di 2 decimali. Se si sommassero prima i tre
+                # importi ESATTI in std_totale e si arrotondasse solo dopo (dentro
+                # post_journal_entry), mentre le varianze sotto vengono arrotondate
+                # OGNUNA per proprio conto, la somma dei tre arrotondamenti
+                # indipendenti (dare) può differire di 1 centesimo dalla somma
+                # esatta arrotondata una volta sola — la classica "somma dei
+                # centesimi arrotondati" vs "centesimo della somma". Verificato:
+                # qty=25.547 con alcuni standard/consuntivi produce uno
+                # sbilanciamento reale che blocca la registrazione con
+                # UnbalancedEntryError. Fix, coerente col resto del codebase
+                # (vedi payroll/F24: arrotonda ogni componente PRIMA di sommare):
+                # arrotondare std_mat/std_lab/std_oh al centesimo qui, subito.
+                std_mat = (standard.standard_material_cost * qty_produced).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP)
+                std_lab = (standard.standard_labor_cost * qty_produced).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP)
+                std_oh = (standard.standard_overhead_cost * qty_produced).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP)
                 std_totale = std_mat + std_lab + std_oh
 
                 journal_lines.append({
