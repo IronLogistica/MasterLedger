@@ -98,6 +98,38 @@ def test_payslip_splits_inps_from_erario_and_posts_employer_burden(app, payroll_
         assert total_inps_credited == Decimal("783.80")
 
 
+def test_payslip_posts_even_when_gross_is_one_cent_off_from_net_plus_deductions(app, payroll_cfg, cost_center):
+    """Bug reale trovato in audit: il "gross" stampato in busta è solo un
+    totale di controllo, arrotondato per conto proprio dal cedolino
+    (Zucchetti) — la validazione ammette una differenza fino a 2 centesimi
+    tra gross e net+deductions (un caso reale, comune). Prima della
+    correzione, il Dare veniva postato su "gross" e l'Avere sulla somma di
+    netto+trattenute: quando i due NON coincidevano esattamente (ma erano
+    comunque entro la tolleranza ammessa), post_journal_entry rifiutava
+    l'intera busta con "Documento non bilanciato" — bloccando una
+    registrazione che la validazione aveva appena dichiarato accettabile."""
+    with app.app_context():
+        cc = cost_center()
+        employees = [{
+            "key": "RSSMRA80A01H501Z", "code": "1", "name": "Mario Rossi",
+            "gross": "2000.01", "net": "1550.00", "deductions": "450.00",
+            "worker_inps_contribution": "183.80", "employer_contribution": "0",
+            "cost_center_id": cc.id, "splits": [{"cost_center_id": cc.id, "percentage": "100.00"}],
+        }]
+        row_id = _import_row(app, employees)
+        row = PayrollImport.query.get(row_id)
+        data = json.loads(row.parsed_data)
+        entry = post_import(row, data, user_id=None)
+        db.session.commit()
+
+        assert entry.total_dare == entry.total_avere == Decimal("2000.00")
+        wage_line = next(l for l in entry.lines if l.account_id == payroll_cfg["wage"])
+        # Il Dare si posta per l'importo che l'Avere sommerà davvero
+        # (net+deductions), non per il "gross" stampato — che resta solo un
+        # controllo di plausibilità, mai il valore effettivamente registrato.
+        assert wage_line.dare == Decimal("2000.00")
+
+
 def test_worker_inps_cannot_exceed_total_deductions():
     with pytest.raises(ValueError, match="non può superare"):
         validate_payslip_breakdown(worker_inps="500.00", deductions="450.00", employer_contribution="0")

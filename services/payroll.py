@@ -262,7 +262,22 @@ def post_import(import_row,reviewed,user_id):
             worker_inps,employer_contribution=validate_payslip_breakdown(x.get('worker_inps_contribution'),ded,x.get('employer_contribution'))
             erario=ded-worker_inps  # resto trattenute: IRPEF e altre ritenute erariali, mai INPS
             splits=x.get('splits') or ([{'cost_center_id':x.get('cost_center_id'),'percentage':'100'}] if x.get('cost_center_id') else [])
-            for cc,amount in allocate_percent(gross,splits): lines.append({'account_id':cfg.wage_expense_account_id,'dare':amount,'avere':0,'cost_center_id':cc,'description':x['name']})
+            # BUG REALE trovato in audit: il "gross" stampato in busta è solo un
+            # totale di controllo, arrotondato per conto proprio dal cedolino
+            # (Zucchetti) — la validazione sopra ammette una differenza fino a 2
+            # centesimi tra gross e net+ded, un caso reale e comune. Ma se si
+            # posta il DARE su gross e l'AVERE su net+worker_inps+erario
+            # (=net+ded), quella differenza AMMESSA finisce dritta in
+            # post_journal_entry, che invece richiede quadratura ESATTA e
+            # rifiuta l'intera busta con "Documento non bilanciato" — bloccando
+            # una registrazione che la validazione stessa ha appena dichiarato
+            # accettabile. Fix (stesso principio già usato altrove: fidarsi
+            # delle componenti REALI — netto pagato, trattenute INPS/erariali,
+            # tutte verificabili contro banca/F24 — non del totale derivato):
+            # il Dare si posta per l'importo ESATTO che l'Avere sommerà
+            # (net+ded), mai per il "gross" stampato, che resta solo un
+            # controllo di plausibilità nella validazione sopra.
+            for cc,amount in allocate_percent(net+ded,splits): lines.append({'account_id':cfg.wage_expense_account_id,'dare':amount,'avere':0,'cost_center_id':cc,'description':x['name']})
             for cc,amount in allocate_percent(net,splits): lines.append({'account_id':cfg.net_salary_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'Netto '+x['name']})
             if worker_inps>0:
                 for cc,amount in allocate_percent(worker_inps,splits): lines.append({'account_id':cfg.inps_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'INPS dipendente '+x['name']})
