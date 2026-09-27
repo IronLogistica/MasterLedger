@@ -118,7 +118,7 @@ class JournalEntry(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     doc_number = db.Column(db.String(20), unique=True, nullable=False)
     doc_type = db.Column(db.String(10), nullable=False)   # SA, KR, DR, KZ, DZ, Cespiti...
-    doc_date = db.Column(db.Date, nullable=False)
+    doc_date = db.Column(db.Date, nullable=False, index=True)
     posting_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
     description = db.Column(db.String(255))
     source_module = db.Column(db.String(20), default="LEDGER")  # LEDGER, MAGAZZINO, VENDITE, PRODUZIONE...
@@ -192,14 +192,14 @@ class JournalLine(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
-    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False, index=True)
     dare = db.Column(db.Numeric(14, 2), default=0)
     avere = db.Column(db.Numeric(14, 2), default=0)
     description = db.Column(db.String(255))
 
     # Oggetto Costi collegato (se il conto è cost_relevant) — Centro di costo,
     # Ordine Interno, o simile. Facoltativo per i conti patrimoniali.
-    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=True)
+    cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id"), nullable=True, index=True)
 
     account = db.relationship("Account")
     cost_center = db.relationship("CostCenter")

@@ -1,0 +1,51 @@
+name: Test
+
+# Copre esattamente i due punti ciechi che un audit runtime ha trovato
+# nella sola suite SQLite: (1) l'avvio/le migrazioni contro un vero
+# PostgreSQL, con l'URL "postgres://"/"postgresql://" così come lo
+# produce Railway/produzione, non un URL con driver scritto a mano; (2)
+# il comando pytest riproducibile identico in locale e qui, senza
+# affidarsi a un PYTHONPATH impostato a mano.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installa le dipendenze dichiarate (identiche a produzione + dev)
+        run: pip install -r requirements-dev.txt
+
+      - name: Suite completa — comando riproducibile, identico al locale
+        # Nessun PYTHONPATH manuale: pytest.ini (pythonpath = .) lo rende
+        # superfluo, qui come sulla macchina di chi contribuisce.
+        run: pytest -q
+        env:
+          # Attiva anche i test PostgreSQL dedicati (altrimenti saltati).
+          # Volutamente nel formato "postgresql://" senza driver esplicito,
+          # per riprodurre cosa vede davvero l'app quando l'URL arriva da
+          # Railway — è compito di config.Config normalizzarlo, non del test.
+          POSTGRES_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres

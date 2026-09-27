@@ -21,6 +21,16 @@ class Config:
     _database_url = os.environ.get("DATABASE_URL", f"sqlite:///{os.path.join(basedir, 'masterledger.db')}")
     if _database_url.startswith("postgres://"):
         _database_url = _database_url.replace("postgres://", "postgresql://", 1)
+    # Il progetto installa psycopg2-binary (non psycopg 3). SQLAlchemy 2.x,
+    # con un URL "postgresql://" generico senza driver esplicito, può
+    # risolvere il dialetto sul driver psycopg (v3) se lo trova prima nella
+    # ricerca degli entry point, anche quando non è affatto installato:
+    # il risultato è un ModuleNotFoundError: No module named 'psycopg' in
+    # avvio/migrazioni, non un errore di connessione. Per non dipendere da
+    # quale driver risulti installato in un dato ambiente, l'URL viene reso
+    # esplicito qui una volta per tutte: postgresql+psycopg2://.
+    if _database_url.startswith("postgresql://"):
+        _database_url = _database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
     SQLALCHEMY_DATABASE_URI = _database_url
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
