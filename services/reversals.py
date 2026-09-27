@@ -8,9 +8,10 @@ stessa transazione della scrittura contabile e del ripristino qty_received/
 qty_delivered — documento, giacenza e contabilità stornano sempre insieme.
 """
 from datetime import datetime
+from decimal import Decimal
 
 from extensions import db
-from models import GoodsReceipt, PurchaseOrderLine, Delivery, SalesOrderLine
+from models import GoodsReceipt, PurchaseOrderLine, Delivery, SalesOrderLine, JournalEntry, AssetDepreciationLine
 from services.posting import _reverse_gl_only, PeriodClosedError
 from services.warehouse import post_stock_movement, WarehouseError
 from services.mm_invoice_quantities import (
@@ -146,6 +147,80 @@ def reverse_delivery(delivery_id, reason, created_by_id=None):
         delivery.reversal_reason = reason.strip()
         delivery.reversed_at = datetime.utcnow()
         delivery.reversed_by_id = created_by_id
+        db.session.commit()
+        return new_entry
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def reverse_depreciation(entry_id, reason, created_by_id=None):
+    """Storna una scrittura di Ammortamento (doc_type AF): contro-movimento
+    GL + ripristino di Asset.accumulated_depreciation, cespite per cespite,
+    in base al dettaglio salvato in AssetDepreciationLine al momento della
+    contabilizzazione (blueprints/assets/routes.py:depreciation).
+
+    Prima di questa funzione un ammortamento contabilizzato con periodo o
+    importo sbagliato non poteva essere corretto in alcun modo: post_journal_entry
+    esclude esplicitamente "AF"/"Cespiti" dallo storno generico da Prima Nota
+    (vedi services/posting.reverse_journal_entry) proprio perché serve un
+    ripristino di dominio dedicato — che prima non esisteva.
+
+    Bloccato per cespite se un ammortamento SUCCESSIVO (non stornato) ha già
+    incrementato ulteriormente lo stesso cespite: gli ammortamenti sono
+    sequenziali (ogni run calcola la propria quota sull'accumulato corrente),
+    quindi stornarne uno più vecchio lasciando in piedi uno più recente sullo
+    stesso cespite lo renderebbe incoerente. Va stornato prima quello più
+    recente sul cespite in conflitto.
+    """
+    if not reason or not reason.strip():
+        raise ReversalError("Il motivo dello storno è obbligatorio.")
+
+    entry = JournalEntry.query.get(entry_id)
+    if entry is None:
+        raise ReversalError("Scrittura di ammortamento non trovata.")
+    if entry.doc_type != "AF":
+        raise ReversalError("Questa scrittura non è un ammortamento (doc_type AF).")
+    if entry.is_reversed:
+        raise ReversalError("Questo ammortamento è già stato stornato.")
+    if entry.reverses_id is not None:
+        raise ReversalError("Non è possibile stornare a sua volta uno storno di ammortamento.")
+
+    dep_lines = AssetDepreciationLine.query.filter_by(entry_id=entry.id).all()
+    if not dep_lines:
+        raise ReversalError(
+            "Questo ammortamento non ha un dettaglio per cespite salvato (probabilmente "
+            "contabilizzato prima dell'introduzione di questo storno): non è possibile "
+            "ripristinare accumulated_depreciation in modo affidabile. Va corretto a mano."
+        )
+
+    blocked = []
+    for dl in dep_lines:
+        conflict = (
+            AssetDepreciationLine.query
+            .join(JournalEntry, AssetDepreciationLine.entry_id == JournalEntry.id)
+            .filter(
+                AssetDepreciationLine.asset_id == dl.asset_id,
+                AssetDepreciationLine.id > dl.id,
+                JournalEntry.is_reversed.is_(False),
+            )
+            .first()
+        )
+        if conflict is not None:
+            blocked.append(dl.asset.code)
+    if blocked:
+        raise ReversalError(
+            "Impossibile stornare — i cespiti " + ", ".join(sorted(set(blocked))) +
+            " hanno già un ammortamento SUCCESSIVO non stornato: storna prima quello."
+        )
+
+    try:
+        new_entry = _reverse_gl_only(entry, created_by_id=created_by_id)
+        for dl in dep_lines:
+            asset = dl.asset
+            asset.accumulated_depreciation = max(
+                Decimal("0"), Decimal(str(asset.accumulated_depreciation or 0)) - Decimal(str(dl.amount))
+            )
         db.session.commit()
         return new_entry
     except Exception:

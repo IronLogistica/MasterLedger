@@ -54,7 +54,17 @@
     </div>
     {% endif %}
 
-    {% if not entry.is_reversed and not entry.reverses_id %}
+    {% if entry.doc_type == 'AF' and not entry.is_reversed and not entry.reverses_id %}
+    <form method="POST" action="{{ url_for('assets.depreciation_reverse', entry_id=entry.id) }}" style="margin-top:16px;"
+          onsubmit="return confirm('Confermi lo storno di questo ammortamento? Il fondo ammortamento dei cespiti coinvolti verrà ripristinato e verrà creato un contro-movimento contabile — l\'originale resterà comunque visibile.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <input type="text" name="reason" placeholder="Motivo dello storno (obbligatorio)" required
+               style="flex:1; min-width:220px;" class="form-control">
+        <button type="submit" class="btn btn-danger">↩️ Storna Ammortamento</button>
+      </div>
+    </form>
+    {% elif entry.doc_type != 'AF' and not entry.is_reversed and not entry.reverses_id %}
     <form method="POST" action="{{ url_for('gl.entry_reverse', entry_id=entry.id) }}" style="margin-top:16px;"
           onsubmit="return confirm('Confermi lo storno di questo documento? Verrà creato un nuovo documento di segno opposto — l\'originale resterà comunque visibile.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button type="submit" class="btn btn-danger">↩️ Storna Documento</button>

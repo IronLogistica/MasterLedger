@@ -319,6 +319,30 @@ class Asset(db.Model):
     active = db.Column(db.Boolean, default=True)
 
 
+class AssetDepreciationLine(db.Model):
+    """Dettaglio per cespite di OGNI scrittura di ammortamento (doc_type AF).
+
+    La scrittura contabile dell'ammortamento è aggregata (due sole righe:
+    Dare costo / Avere fondo ammortamento, sul totale del periodo) — senza
+    questo dettaglio non c'era modo di sapere QUANTO di quel totale fosse
+    stato imputato a CIASCUN cespite, quindi nessun modo di stornare
+    correttamente un ammortamento (ripristinando accumulated_depreciation
+    cespite per cespite) se il periodo veniva sbagliato. Vedi
+    services/reversals.reverse_depreciation.
+    """
+    __tablename__ = "asset_depreciation_lines"
+
+    id = db.Column(db.Integer, primary_key=True)
+    entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False, index=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey("assets.id"), nullable=False, index=True)
+    amount = db.Column(db.Numeric(14, 2), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    entry = db.relationship("JournalEntry", backref=db.backref(
+        "depreciation_lines", cascade="all, delete-orphan"))
+    asset = db.relationship("Asset")
+
+
 # ══════════════════════════════════════════════════════════════
 # ENTERPRISE STRUCTURE — SETUP DEI MAGAZZINI (Sedi operative e aree di magazzino)
 # ══════════════════════════════════════════════════════════════

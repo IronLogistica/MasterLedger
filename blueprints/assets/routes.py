@@ -5,8 +5,9 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, AccountMapping, Asset, FiscalParameter, JournalEntry
+from models import Account, AccountMapping, Asset, AssetDepreciationLine, FiscalParameter, JournalEntry
 from services.posting import post_journal_entry, UnbalancedEntryError
+from services.reversals import reverse_depreciation, ReversalError
 
 assets_bp = Blueprint("assets", __name__, template_folder="../../templates/assets")
 
@@ -119,7 +120,7 @@ def depreciation():
 
         period_end = date(year, period, monthrange(year, period)[1])
         total_dep = Decimal("0")
-        affected = 0
+        per_asset = []  # [(asset, importo)] — serve per il dettaglio storno, vedi AssetDepreciationLine
         for a in assets:
             if a.acquisition_date and a.acquisition_date > period_end:
                 continue
@@ -136,7 +137,7 @@ def depreciation():
                 continue
             total_dep += dep
             a.accumulated_depreciation = accumulated + dep
-            affected += 1
+            per_asset.append((a, dep))
 
         if total_dep <= 0:
             flash("Nessun cespite ammortizzabile nel periodo selezionato.", "warning")
@@ -155,12 +156,33 @@ def depreciation():
                 lines=lines, source_module="LEDGER", reference=reference,
                 created_by_id=current_user.id, commit=False,
             )
+            # Dettaglio per cespite — nella stessa transazione della
+            # scrittura aggregata: senza questo, uno storno successivo non
+            # saprebbe quanto ripristinare su ciascun cespite (vedi
+            # services/reversals.reverse_depreciation).
+            for a, dep in per_asset:
+                db.session.add(AssetDepreciationLine(entry_id=entry.id, asset_id=a.id, amount=dep))
             db.session.commit()
             flash(f"Ammortamento {reference} completato. Doc. {entry.doc_number} — "
-                  f"totale {total_dep:.2f} € su {affected} cespiti.", "success")
+                  f"totale {total_dep:.2f} € su {len(per_asset)} cespiti.", "success")
             return redirect(url_for("gl.entry_detail", entry_id=entry.id))
         except (UnbalancedEntryError, ValueError) as e:
             db.session.rollback()
             flash(str(e), "danger")
 
     return render_template("assets/depreciation.html", assets=assets, current_year=date.today().year)
+
+
+@assets_bp.route("/depreciation/<int:entry_id>/reverse", methods=["POST"])
+@login_required
+def depreciation_reverse(entry_id):
+    """Storno di dominio per un ammortamento contabilizzato per errore
+    (periodo o importo sbagliato) — vedi services/reversals.reverse_depreciation."""
+    reason = (request.form.get("reason") or "").strip()
+    try:
+        reverse_depreciation(entry_id, reason, created_by_id=current_user.id)
+        flash("Ammortamento stornato: fondo ammortamento dei cespiti ripristinato e "
+              "scrittura contabile contro-mossa.", "success")
+    except ReversalError as e:
+        flash(str(e), "danger")
+    return redirect(url_for("gl.entry_detail", entry_id=entry_id))
