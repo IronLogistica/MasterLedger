@@ -8,7 +8,7 @@ from models import Account, AccountMapping, CostCenter, EconomicSubject, Journal
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.co import validate_co_assignment, COValidationError
 from services.payments import create_installments_for_invoice, allocate_payment, PaymentAllocationError
-from models import InvoiceInstallment
+from models import InvoiceInstallment, PaymentAllocation
 
 ap_bp = Blueprint("ap", __name__, template_folder="../../templates/ap")
 
@@ -304,8 +304,27 @@ def supplier_payment():
                 inv.paid_by_entry_id = payment_entry.id
                 # Sincronizza le rate (Fase 3): un pagamento a saldo pieno da
                 # questa vista chiude anche lo Scadenzario, non solo il flag.
+                # BUG REALE trovato in audit (stesso di ar/routes.py::customer_payment):
+                # senza registrare qui una PaymentAllocation per la quota
+                # REALMENTE chiusa, uno storno successivo di QUESTO pagamento a
+                # saldo (reverse_journal_entry) non trova alcuna allocazione
+                # tracciata e resetta l'intera rata al lordo originale — anche
+                # se un acconto parziale precedente, fatto tramite lo
+                # Scadenzario granulare (/gl/scadenzario/paga) e mai stornato,
+                # aveva già ridotto legittimamente il residuo. Il denaro di
+                # quell'acconto resta comunque sul conto banca (la sua
+                # scrittura non viene toccata): il risultato sarebbe un
+                # fornitore che risulta di nuovo debitore dell'intero importo,
+                # rischiando un doppio pagamento.
                 for inst in InvoiceInstallment.query.filter_by(entry_id=inv.id).all():
+                    residuo_rata = inst.residual_amount or 0
+                    if residuo_rata > 0:
+                        db.session.add(PaymentAllocation(
+                            payment_entry_id=payment_entry.id, installment_id=inst.id,
+                            cash_amount=residuo_rata, abbuono_amount=0,
+                        ))
                     inst.residual_amount = 0
+                    inst.version += 1
             db.session.commit()
             flash(f"Pagamento registrato: Doc. {payment_entry.doc_number} — Totale {total:.2f} €. "
                   f"{len(invoices)} documenti compensati.", "success")

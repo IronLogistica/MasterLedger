@@ -6,7 +6,8 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 from flask_login import login_required, current_user
 
 from extensions import db
-from models import Account, AccountMapping, CostCenter, EconomicSubject, JournalEntry, InvoiceLine, InvoiceInstallment
+from models import (Account, AccountMapping, CostCenter, EconomicSubject, JournalEntry, InvoiceLine,
+                     InvoiceInstallment, PaymentAllocation)
 from services.payments import create_installments_for_invoice, allocate_payment, PaymentAllocationError
 from services.posting import post_journal_entry, UnbalancedEntryError
 from services.fatturapa import build_fatturapa_xml, FatturaPAConfigError
@@ -366,8 +367,29 @@ def customer_payment():
                 inv.is_paid = True
                 inv.paid_by_entry_id = payment_entry.id
                 if inv.doc_type == "DR":
+                    # BUG REALE trovato in audit: qui si azzerava residual_amount
+                    # senza mai creare una PaymentAllocation. reverse_journal_entry
+                    # decide come ripristinare lo Scadenzario guardando SE esistono
+                    # PaymentAllocation tracciate per il pagamento stornato: se
+                    # questa fattura aveva GIÀ ricevuto un acconto parziale tramite
+                    # lo Scadenzario granulare (/gl/scadenzario/paga, tracciato) e
+                    # POI veniva chiusa a saldo da qui (non tracciato), stornare
+                    # SOLO questo incasso a saldo resettava l'intera rata al lordo
+                    # originale — cancellando anche l'acconto granulare precedente,
+                    # mai stornato e il cui denaro è ancora, correttamente, sul
+                    # conto banca di quella scrittura. Registrando anche qui una
+                    # PaymentAllocation per la quota REALMENTE chiusa da questo
+                    # incasso, lo storno usa lo stesso percorso "granulare" di
+                    # reverse_payment_allocations e ripristina solo quella quota.
                     for inst in InvoiceInstallment.query.filter_by(entry_id=inv.id).all():
+                        residuo_rata = inst.residual_amount or 0
+                        if residuo_rata > 0:
+                            db.session.add(PaymentAllocation(
+                                payment_entry_id=payment_entry.id, installment_id=inst.id,
+                                cash_amount=residuo_rata, abbuono_amount=0,
+                            ))
                         inst.residual_amount = 0
+                        inst.version += 1
             db.session.commit()
             flash(f"Incasso registrato: Doc. {payment_entry.doc_number} — Totale {total:.2f} €. "
                   f"{len(invoices)} documenti compensati.", "success")
