@@ -1,5 +1,5 @@
 """Conservative PDF extraction and postings for Zucchetti payslips and all F24 sections."""
-import hashlib, json, os, re, subprocess, tempfile
+import calendar, hashlib, json, os, re, subprocess, tempfile
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from extensions import db
@@ -247,8 +247,41 @@ def _validated_account(account_id):
     if not account or not account.active:raise ValueError('Il conto selezionato non è valido o non è attivo.')
     return account
 
+def _period_end(period):
+    """Data di competenza FI: ultimo giorno del mese YYYY-MM."""
+    try:
+        year, month = (int(x) for x in str(period).split('-'))
+        return date(year, month, calendar.monthrange(year, month)[1])
+    except (TypeError, ValueError):
+        raise ValueError('Periodo paghe non valido: atteso YYYY-MM.')
+
+
 def post_import(import_row,reviewed,user_id):
     if import_row.status=='posted':raise ValueError('Documento già contabilizzato.')
+    period = payroll_period(reviewed.get('payroll_period') or reviewed.get('period') or import_row.accounting_period or import_row.document_reference)
+    if import_row.document_kind in ('PAYSLIP', 'RATEI'):
+        if not period:
+            raise ValueError('Periodo contabile paghe/ratei obbligatorio.')
+        duplicate = None
+        for candidate in (PayrollImport.query
+                          .filter(PayrollImport.id != import_row.id,
+                                  PayrollImport.document_kind == import_row.document_kind,
+                                  PayrollImport.status == 'posted').all()):
+            candidate_period = candidate.accounting_period
+            if not candidate_period:
+                try:
+                    old_data = json.loads(candidate.parsed_data)
+                except (TypeError, ValueError):
+                    old_data = {}
+                candidate_period = payroll_period(old_data.get('payroll_period') or
+                                                  old_data.get('period') or
+                                                  candidate.document_reference)
+            if candidate_period == period:
+                duplicate = candidate
+                break
+        if duplicate:
+            raise ValueError(f'{import_row.document_kind} {period} già contabilizzato nel documento {duplicate.id}.')
+        import_row.accounting_period = period
     cfg=PayrollAccountConfig.query.first()
     if not cfg:raise ValueError('Configurazione conti paghe assente.')
     if import_row.document_kind=='PAYSLIP':
@@ -287,7 +320,7 @@ def post_import(import_row,reviewed,user_id):
                 for cc,amount in allocate_percent(employer_contribution,splits):
                     lines.append({'account_id':cfg.employer_burden_account_id,'dare':amount,'avere':0,'cost_center_id':cc,'description':'Oneri sociali azienda '+x['name']})
                     lines.append({'account_id':cfg.inps_payable_account_id,'dare':0,'avere':amount,'cost_center_id':cc,'description':'INPS azienda '+x['name']})
-        dt=date.today();desc='Accantonamento paghe '+reviewed.get('period','')
+        dt=_period_end(period);desc='Accantonamento paghe '+reviewed.get('period','')
     elif import_row.document_kind=='RATEI':
         if reviewed.get('provisional') and not reviewed.get('provisional_confirmed'): raise ValueError('Rateo provvisorio: spuntare la conferma esplicita prima della contabilizzazione.')
         ensure_config(cfg,[('accrued_holiday_expense_account','costo ratei ferie'),('accrued_permission_expense_account','costo ratei permessi'),('accrued_thirteenth_expense_account','costo rateo tredicesima'),('accrued_payable_account','debiti ratei')])
@@ -304,7 +337,7 @@ def post_import(import_row,reviewed,user_id):
                 amount=sum((Decimal(str(item.get(k,'0'))) for k in ('amount','contributions')),Decimal('0'))
                 for cc,value in allocate_percent(amount,splits):
                     lines += [{'account_id':account,'dare':value,'avere':0,'cost_center_id':cc,'description':item['kind']+' '+employee['name']},{'account_id':payable,'dare':0,'avere':value,'cost_center_id':cc,'description':'Debito rateo '+item['kind']+' '+employee['name']}]
-        dt=date.today();desc='Ratei differiti '+reviewed.get('period','')
+        dt=_period_end(period);desc='Ratei differiti '+reviewed.get('period','')
     else:
         ensure_config(cfg,[('inps_payable_account','debiti INPS'),('withholding_payable_account','debiti ritenute'),('bank_account','banca')])
         selected=[x for x in reviewed.get('lines',[]) if x.get('selected')]
@@ -331,6 +364,11 @@ def post_import(import_row,reviewed,user_id):
             bank+=debit-credit
         if not bank:raise ValueError('Totale netto F24 nullo: non è possibile generare una riga banca significativa.')
         lines.append({'account_id':cfg.bank_account_id,'dare':max(-bank,Decimal('0')),'avere':max(bank,Decimal('0')),'description':'Pagamento F24 totale selezionato'})
-        dt=date.today();desc='Pagamento F24 '+reviewed.get('due_date','')
-    entry=post_journal_entry('PG','PG',dt,desc,lines,source_module='PAGHE',reference=import_row.fingerprint[:16],created_by_id=user_id,commit=False)
+        try:
+            dt=datetime.strptime(reviewed.get('due_date',''), '%d/%m/%Y').date()
+        except (TypeError, ValueError):
+            dt=date.today()
+        desc='Pagamento F24 '+reviewed.get('due_date','')
+    import_row.document_date = dt
+    entry=post_journal_entry('PG','PG',dt,desc,lines,source_module='PAGHE',reference=import_row.fingerprint[:16],created_by_id=user_id,posting_date=dt,commit=False)
     import_row.status='posted';import_row.journal_entry_id=entry.id;import_row.parsed_data=json.dumps(reviewed);import_row.posted_at=datetime.utcnow();db.session.commit();return entry

@@ -14,7 +14,7 @@
 
     <table class="masterledger-table">
       <thead>
-        <tr><th>Data</th><th>Documento</th><th>Tipo</th><th>Descrizione</th><th>Importo</th><th>Stato</th></tr>
+        <tr><th>Data</th><th>Documento</th><th>Tipo</th><th>Descrizione</th><th>Importo residuo</th><th>Stato</th></tr>
       </thead>
       <tbody>
         {% for d in documenti %}
@@ -23,11 +23,18 @@
           <td class="mono"><a href="{{ url_for('gl.entry_detail', entry_id=d.entry.id) }}">{{ d.entry.doc_number }}</a></td>
           <td>{{ doc_type_labels.get(d.entry.doc_type, d.entry.doc_type) }}</td>
           <td>{{ d.entry.description or "" }}</td>
-          <td class="mono">{{ "%.2f"|format(d.importo) }}</td>
+          <td class="mono">
+            {{ "%.2f"|format(d.importo) }}
+            {% if d.importo_nominale != d.importo and d.entry.doc_type in ("KR", "DR", "DG") %}
+              <div style="font-size:11px;color:var(--ml-muted);">su {{ "%.2f"|format(d.importo_nominale) }}</div>
+            {% endif %}
+          </td>
           <td>
             {% if d.stato == "Aperto" %}<span class="status-badge status-open">Aperto</span>
             {% elif d.stato == "Stornato" %}<span class="status-badge" style="background: rgba(229,83,75,.2); color: var(--ml-red);">Stornato</span>
+            {% elif d.stato == "Parziale" %}<span class="status-badge" style="background:rgba(245,166,35,.18);color:#d79a2b;">Parziale</span>
             {% elif d.stato == "Eseguito" %}<span class="status-badge" style="background: rgba(150,150,150,.2); color: #bbb;">Eseguito</span>
+            {% elif d.stato == "Storno" %}<span class="status-badge" style="background:rgba(150,150,150,.2);color:#bbb;">Documento di storno</span>
             {% else %}<span class="status-badge status-paid">Pagato/Incassato</span>{% endif %}
           </td>
         </tr>

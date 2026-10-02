@@ -20,7 +20,7 @@ blueprints/production/routes.py::completata().
 from decimal import Decimal
 
 from extensions import db
-from models import Account, JournalEntry, Material, ProductionEntry, StandardCost
+from models import Account, JournalEntry, Material, ProductionEntry, StandardCost, StockMovement
 
 
 def _seed_produzione_accounts():
@@ -72,6 +72,10 @@ def test_completata_with_standard_cost_and_fractional_quantity_balances(login, a
         pe = ProductionEntry.query.filter_by(material_id=material_id).one()
         entry = JournalEntry.query.get(pe.journal_entry_id)
         assert entry.total_dare == entry.total_avere
+        receipt = StockMovement.query.filter_by(source_type="production_entry", source_id=pe.id,
+                                                movement_type="production_receipt").one()
+        pf_debit = next(line.dare for line in entry.lines if line.account.code == "160000")
+        assert receipt.total_value == pf_debit
 
 
 def test_completata_quantizes_form_money_inputs_to_cents(login, app):

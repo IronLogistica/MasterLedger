@@ -651,24 +651,39 @@ def partitario(economic_subject_id):
     documenti = []
     saldo_aperto = Decimal("0")
     for e in entries:
-        importo = (Decimal(str(e.gross_amount)) if e.gross_amount is not None
-                   else Decimal(str(e.total_dare)))
-        if e.doc_type in ("KR", "DR", "DG"):
-            # Documenti-fattura: hanno un proprio stato aperto/pagato (is_paid).
-            # Contano nel saldo SOLO finché sono aperti — una volta pagati,
-            # il pagamento/incasso collegato li azzera (non va sommato di nuovo).
+        nominale = (Decimal(str(e.gross_amount)) if e.gross_amount is not None
+                    else Decimal(str(e.total_dare)))
+        importo = nominale
+        if e.reverses_id is not None:
+            # Il documento di storno mantiene soggetto e importo per audit, ma
+            # non è una nuova partita aperta: neutralizza il documento originario.
+            stato = "Storno"
+        elif e.doc_type in ("KR", "DR", "DG"):
+            installments = InvoiceInstallment.query.filter_by(entry_id=e.id).all()
+            residuo = sum(
+                (Decimal(str(inst.residual_amount or 0)) for inst in installments),
+                Decimal("0"),
+            ) if installments else (Decimal("0") if e.is_paid else nominale)
+            importo = residuo
             segno = Decimal("-1") if e.doc_type == "DG" else Decimal("1")
-            if not e.is_reversed and not e.is_paid:
-                saldo_aperto += segno * importo
-            stato = "Stornato" if e.is_reversed else ("Pagato/Incassato" if e.is_paid else "Aperto")
+            if not e.is_reversed:
+                saldo_aperto += segno * residuo
+            if e.is_reversed:
+                stato = "Stornato"
+            elif residuo <= 0:
+                stato = "Pagato/Incassato"
+            elif residuo < nominale:
+                stato = "Parziale"
+            else:
+                stato = "Aperto"
         else:
-            # Pagamenti/incassi (KZ/DZ): non hanno un proprio "aperto" — servono
-            # solo a chiudere la fattura collegata, che si è già azzerata sopra.
-            # Compaiono qui solo per tracciabilità, saldo_aperto invariato.
+            # Pagamenti/incassi sono tracciati ma non sommati una seconda volta:
+            # il loro effetto è già incluso nel residuo delle rate allocate.
             stato = "Stornato" if e.is_reversed else "Eseguito"
         documenti.append({
             "entry": e,
             "importo": importo,
+            "importo_nominale": nominale,
             "stato": stato,
         })
 

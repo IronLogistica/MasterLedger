@@ -7,6 +7,7 @@ gli oneri sociali a carico azienda."""
 from decimal import Decimal
 import json
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from extensions import db
 from models import Account, CostCenter, PayrollAccountConfig, PayrollImport
@@ -69,6 +70,9 @@ def test_payslip_splits_inps_from_erario_and_posts_employer_burden(app, payroll_
         lines = {l.account_id: l for l in entry.lines}
         # Quadratura formale, sempre garantita da post_journal_entry
         assert entry.total_dare == entry.total_avere
+        # La data FI resta nel mese di competenza del cedolino.
+        assert str(entry.posting_date) == '2026-01-31'
+        assert row.accounting_period == '2026-01'
 
         wage_line = next(l for l in entry.lines if l.account_id == payroll_cfg["wage"])
         assert wage_line.dare == Decimal("2000.00")
@@ -171,3 +175,39 @@ def test_employer_burden_account_required_only_if_amount_positive(app, payroll_c
         data = json.loads(row.parsed_data)
         entry = post_import(row, data, user_id=None)
         assert entry.total_dare == entry.total_avere
+
+
+def test_same_payroll_kind_and_period_cannot_be_imported_twice(app):
+    """Hash diversi non devono consentire due mallopponi dello stesso mese."""
+    with app.app_context():
+        first = PayrollImport(document_kind='PAYSLIP', filename='a.pdf', fingerprint='period-a',
+                              document_reference='Gennaio 2026', accounting_period='2026-01',
+                              parsed_data='{}')
+        second = PayrollImport(document_kind='PAYSLIP', filename='b.pdf', fingerprint='period-b',
+                               document_reference='Gennaio 2026', accounting_period='2026-01',
+                               parsed_data='{}')
+        db.session.add(first); db.session.commit()
+        db.session.add(second)
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+
+def test_historical_posted_payroll_without_new_period_column_blocks_duplicate(app, payroll_cfg, cost_center):
+    with app.app_context():
+        cc = cost_center()
+        data = {'period': 'Gennaio 2026', 'payroll_period': '2026-01', 'employees': [{
+            'key': 'LEGACY', 'code': '1', 'name': 'Storico', 'gross': '1000.00',
+            'net': '800.00', 'deductions': '200.00', 'worker_inps_contribution': '90.00',
+            'employer_contribution': '0.00', 'cost_center_id': cc.id,
+            'splits': [{'cost_center_id': cc.id, 'percentage': '100.00'}]}]}
+        historical = PayrollImport(document_kind='PAYSLIP', filename='old.pdf', fingerprint='old-period',
+                                   document_reference='Gennaio 2026', accounting_period=None,
+                                   parsed_data=json.dumps(data), status='posted')
+        current = PayrollImport(document_kind='PAYSLIP', filename='new.pdf', fingerprint='new-period',
+                                document_reference='Gennaio 2026', accounting_period='2026-01',
+                                parsed_data=json.dumps(data))
+        db.session.add_all([historical, current]); db.session.commit()
+        with pytest.raises(ValueError, match='già contabilizzato'):
+            post_import(current, data, user_id=None)
+        db.session.rollback()

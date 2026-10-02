@@ -529,6 +529,8 @@ def _genera_rateo_ddt(d, cost_center_id=None, cost_center_ids=None):
     diverso per riga (generazione singola); se assente o una riga non è
     presente nel dict, si usa cost_center_id come riserva unica (usato
     dalla generazione massiva, dove non c'è un form per riga)."""
+    if d.is_reversed:
+        raise ValueError(f"DDT {d.doc_number}: documento stornato, non generabile né fatturabile.")
     if d.cogs_entry_id is None:
         raise ValueError(f"DDT {d.doc_number}: nessuna Uscita Merci collegata, non generabile.")
     if d.billing_entry_id is not None:
@@ -570,7 +572,8 @@ def fatture_da_emettere():
     """Elenco DDT spediti ma non ancora fatturati — con la possibilità di
     generare (o vedere già generato) il rateo di competenza di fine periodo."""
     da_fatturare = (Delivery.query
-                    .filter(Delivery.billing_entry_id.is_(None), Delivery.cogs_entry_id.isnot(None))
+                    .filter(Delivery.billing_entry_id.is_(None), Delivery.cogs_entry_id.isnot(None),
+                            Delivery.is_reversed.is_(False))
                     .order_by(Delivery.id.desc()).all())
     cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
     valori_stimati = {
@@ -610,7 +613,7 @@ def fatture_da_emettere_genera_tutti():
     cost_center_id = request.form.get("cost_center_id", type=int)
     candidati = (Delivery.query
                 .filter(Delivery.billing_entry_id.is_(None), Delivery.cogs_entry_id.isnot(None),
-                        Delivery.accrual_entry_id.is_(None)).all())
+                        Delivery.accrual_entry_id.is_(None), Delivery.is_reversed.is_(False)).all())
     generati, errori = 0, []
     for d in candidati:
         try:
@@ -653,7 +656,9 @@ def fatture_da_emettere_storna(delivery_id):
 @sd_bp.route("/billing", methods=["GET", "POST"])
 @login_required
 def billing():
-    to_bill = Delivery.query.filter_by(billing_entry_id=None).order_by(Delivery.id.desc()).all()
+    to_bill = (Delivery.query
+               .filter(Delivery.billing_entry_id.is_(None), Delivery.is_reversed.is_(False))
+               .order_by(Delivery.id.desc()).all())
     cost_centers = CostCenter.query.filter_by(active=True).order_by(CostCenter.code).all()
 
     if request.method == "POST":
@@ -661,6 +666,9 @@ def billing():
         d = Delivery.query.get(delivery_id)
         if d is None:
             flash("DDT non trovato.", "danger")
+            return redirect(url_for("sd.billing"))
+        if d.is_reversed:
+            flash(f"Il DDT {d.doc_number} è stornato e non può essere fatturato.", "danger")
             return redirect(url_for("sd.billing"))
         if d.is_billed:
             flash(f"Il DDT {d.doc_number} è già stato fatturato.", "warning")
@@ -754,7 +762,7 @@ def billing():
             flash(str(e), "danger")
         return redirect(url_for("sd.billing"))
 
-    billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None)) \
+    billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None), Delivery.is_reversed.is_(False)) \
                            .order_by(Delivery.id.desc()).limit(30).all()
     return render_template("sd/billing.html", to_bill=to_bill, billed=billed, cost_centers=cost_centers)
 
@@ -765,7 +773,7 @@ def billing():
 @sd_bp.route("/margini")
 @login_required
 def margini():
-    billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None)) \
+    billed = Delivery.query.filter(Delivery.billing_entry_id.isnot(None), Delivery.is_reversed.is_(False)) \
                            .order_by(Delivery.id.desc()).all()
     rows = []
     tot_rev = tot_cogs = 0.0

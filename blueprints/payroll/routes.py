@@ -2,12 +2,14 @@ import json
 from decimal import Decimal, InvalidOperation
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required, current_user
+from sqlalchemy.exc import IntegrityError
 from extensions import db
 from models import (Account, CostCenter, PayrollAccountConfig, PayrollEmployeeMapping, PayrollImport,
                      F24ImuMapping, PayrollEmployeeAllocation, JournalEntry, JournalLine)
 from services.payroll import (parse_payslips, parse_f24, fingerprint, PayrollParseError,
                               post_import, posted_payslip_allocations, parse_ratei, validate_percent_splits, mapping_splits, approved_payslip_splits,
-                              default_worker_inps, default_employer_contribution, validate_payslip_breakdown)
+                              default_worker_inps, default_employer_contribution, validate_payslip_breakdown,
+                              payroll_period)
 from services.posting import post_journal_entry, UnbalancedEntryError
 from blueprints.decorators import commercialista_required
 payroll_bp=Blueprint('payroll',__name__,template_folder='../../templates/payroll')
@@ -40,8 +42,41 @@ def upload():
     try: parsed=parse_payslips(payload) if kind=='PAYSLIP' else parse_ratei(payload) if kind=='RATEI' else parse_f24(payload)
     except PayrollParseError as e:
         flash(str(e),'danger'); return redirect(url_for('payroll.index'))
-    row=PayrollImport(document_kind=kind,filename=f.filename,fingerprint=fp,document_reference=parsed.get('period') or parsed.get('due_date'),parsed_data=json.dumps(parsed),created_by_id=current_user.id)
-    db.session.add(row); db.session.commit()
+    period = parsed.get('payroll_period') if kind in ('PAYSLIP', 'RATEI') else None
+    if kind in ('PAYSLIP', 'RATEI') and not period:
+        flash('Periodo contabile non riconosciuto: correggere il documento prima dell’importazione.', 'danger')
+        return redirect(url_for('payroll.index'))
+    existing_period = None
+    if period:
+        for candidate in PayrollImport.query.filter_by(document_kind=kind).all():
+            candidate_period = candidate.accounting_period
+            if not candidate_period:
+                try:
+                    old_data = json.loads(candidate.parsed_data)
+                except (TypeError, ValueError):
+                    old_data = {}
+                candidate_period = payroll_period(old_data.get('payroll_period') or old_data.get('period') or
+                                                  candidate.document_reference)
+            if candidate_period == period:
+                existing_period = candidate
+                break
+    if existing_period:
+        flash(f'{kind}: esiste già un documento per il periodo {period} (stato: {existing_period.status}).', 'warning')
+        return redirect(url_for('payroll.review', import_id=existing_period.id))
+    row=PayrollImport(document_kind=kind,filename=f.filename,fingerprint=fp,
+                      document_reference=parsed.get('period') or parsed.get('due_date'),
+                      accounting_period=period, parsed_data=json.dumps(parsed),created_by_id=current_user.id)
+    db.session.add(row)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        # Il vincolo DB protegge anche da due upload simultanei dello stesso mese.
+        existing_period = PayrollImport.query.filter_by(document_kind=kind, accounting_period=period).first() if period else None
+        if existing_period:
+            flash(f'{kind}: il periodo {period} è già stato importato.', 'warning')
+            return redirect(url_for('payroll.review', import_id=existing_period.id))
+        raise
     return redirect(url_for('payroll.review',import_id=row.id))
 
 @payroll_bp.route('/<int:import_id>/review',methods=['GET','POST'])
