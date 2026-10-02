@@ -118,6 +118,14 @@ def reverse_delivery(delivery_id, reason, created_by_id=None):
         raise ReversalError("DDT senza scrittura di Costo del Venduto collegata — dato incoerente.")
 
     try:
+        # Se il DDT aveva generato Fatture da Emettere, lo storno del DDT deve
+        # annullare anche il rateo: altrimenti resterebbe un ricavo senza consegna.
+        if delivery.accrual_entry_id is not None:
+            accrual_entry = JournalEntry.query.get(delivery.accrual_entry_id)
+            if accrual_entry is not None and not accrual_entry.is_reversed:
+                _reverse_gl_only(accrual_entry, created_by_id=created_by_id)
+            delivery.accrual_entry_id = None
+
         new_entry = _reverse_gl_only(delivery.cogs_entry, created_by_id=created_by_id)
         for dl_line in delivery.lines:
             # Riferimento diretto alla riga ordine (righe DDT create da qui in

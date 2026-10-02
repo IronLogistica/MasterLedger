@@ -959,6 +959,19 @@ def completata():
                 except Exception:
                     standard = None
 
+            raw_posting_date = (request.form.get("posting_date") or "").strip()
+            if raw_posting_date:
+                try:
+                    production_date = datetime.strptime(raw_posting_date, "%Y-%m-%d").date()
+                except ValueError:
+                    raise ValueError("Data contabile non valida (usa AAAA-MM-GG).")
+            elif mese_produzione:
+                # Compatibilità con invii precedenti: il mese di produzione
+                # chiude contabilmente all'ultimo giorno del mese, mai a oggi.
+                production_date = date(anno_prod, mese_prod_num, calendar.monthrange(anno_prod, mese_prod_num)[1])
+            else:
+                production_date = date.today()
+
             # Se il form ha usato "Calcola da distinta base", conosciamo ESATTAMENTE
             # quali componenti sono stati consumati e quanto — li scarichiamo
             # davvero dal magazzino interno. Se l'importo è stato inserito a mano,
@@ -969,18 +982,8 @@ def completata():
                 _, dettaglio_bom = _calcola_materie_prime_da_bom(material, qty_produced)
                 componenti_da_scaricare = [d for d in dettaglio_bom if d["quantita_necessaria"] > 0]
 
-            # ── Carico del prodotto finito: il magazzino è interno, quindi
-            # questo passaggio non dipende più da un sistema esterno
-            # raggiungibile o meno — è la stessa transazione DB di tutto
-            # il resto (contabilità inclusa nello stesso commit più sotto).
-            post_stock_movement(
-                material_id=material.id, qty=qty_produced, movement_type="production_receipt",
-                source_type="production_entry", source_id=None,
-                unit_cost=(totale_cogm / qty_produced).quantize(Decimal("0.0001")),
-                notes="Produzione completata", created_by_id=current_user.id,
-            )
-
             journal_lines = []
+            capitalized_cost = totale_cogm
             variance_materiali = Decimal("0")
             variance_manodopera = Decimal("0")
             variance_overhead = Decimal("0")
@@ -1008,6 +1011,7 @@ def completata():
                 std_oh = (standard.standard_overhead_cost * qty_produced).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP)
                 std_totale = std_mat + std_lab + std_oh
+                capitalized_cost = std_totale
 
                 journal_lines.append({
                     "account_id": fert_acc.id, "dare": std_totale, "avere": 0,
@@ -1062,17 +1066,19 @@ def completata():
             pr_doc_number = DocumentSequence.next_number("PR", "40")
 
             entry = post_journal_entry(
-                doc_type="SA", prefix="10", doc_date=None,
+                doc_type="SA", prefix="10", doc_date=production_date,
                 description=f"Produzione Completata {pr_doc_number} — {material.code} "
                             f"({request.form.get('period_label', '').strip() or 'periodo corrente'})",
                 lines=journal_lines, source_module="PRODUZIONE",
                 reference=pr_doc_number, created_by_id=current_user.id,
+                posting_date=production_date, commit=False,
             )
 
             pe = ProductionEntry(
                 doc_number=pr_doc_number,
                 material_id=material.id,
                 qty_produced=qty_produced,
+                doc_date=production_date,
                 raw_material_cost=raw_cost,
                 direct_labor_cost=labor_cost,
                 overhead_cost=overhead_cost,
@@ -1086,6 +1092,19 @@ def completata():
                 created_by_id=current_user.id,
             )
             db.session.add(pe)
+            db.session.flush()
+
+            # Il valore del carico PF deve coincidere con il Dare FI: standard
+            # quando applicabile, consuntivo altrimenti. Così stock ledger,
+            # rimanenze e varianze restano riconciliabili al centesimo.
+            post_stock_movement(
+                material_id=material.id, qty=qty_produced, movement_type="production_receipt",
+                source_type="production_entry", source_id=pe.id,
+                unit_cost=(capitalized_cost / qty_produced).quantize(Decimal("0.0001")),
+                posting_value=capitalized_cost,
+                doc_date=production_date,
+                notes=f"Produzione completata {pr_doc_number}", created_by_id=current_user.id,
+            )
 
             # Scarico componenti da BOM: stessa transazione di tutto il resto
             # (magazzino interno, non più un sistema esterno da richiamare in
@@ -1094,8 +1113,9 @@ def completata():
             for comp in componenti_da_scaricare:
                 post_stock_movement(
                     material_id=comp["material_id"], qty=-Decimal(str(comp["quantita_necessaria"])),
-                    movement_type="production_issue", source_type="production_entry", source_id=None,
-                    unit_cost=comp.get("costo_unitario"), notes=f"Produzione completata {material.code}",
+                    movement_type="production_issue", source_type="production_entry", source_id=pe.id,
+                    unit_cost=comp.get("costo_unitario"), doc_date=production_date,
+                    notes=f"Produzione completata {pr_doc_number} — {material.code}",
                     created_by_id=current_user.id,
                 )
 
@@ -1119,4 +1139,5 @@ def completata():
             db.session.rollback()
             flash(str(e), "danger")
 
-    return render_template("production/completata.html", materiali_finiti=materiali_finiti, ultime=ultime)
+    return render_template("production/completata.html", materiali_finiti=materiali_finiti,
+                           ultime=ultime, today=date.today())

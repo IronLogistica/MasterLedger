@@ -542,7 +542,10 @@ class StockMovement(db.Model):
     material_id = db.Column(db.Integer, db.ForeignKey("materials.id"), nullable=False, index=True)
     warehouse_area_id = db.Column(db.Integer, db.ForeignKey("warehouse_areas.id"), nullable=True)
     qty = db.Column(db.Numeric(14, 3), nullable=False)          # + carico, - scarico
-    unit_cost = db.Column(db.Numeric(14, 4), nullable=True)     # valorizzazione al momento del movimento
+    unit_cost = db.Column(db.Numeric(14, 4), nullable=True)     # costo unitario informativo
+    # Valore contabile esteso del movimento, fissato al centesimo. Evita che
+    # qty × unit_cost (limitato a 4 decimali) diverga dal Dare/Avere FI.
+    posting_value = db.Column(db.Numeric(14, 2), nullable=True)
     movement_type = db.Column(db.String(20), nullable=False)    # delivery|goods_receipt|production_issue|production_receipt|adjustment
     source_type = db.Column(db.String(30), nullable=True)       # 'delivery_line'|'goods_receipt_line'|'production_order'|'manual'
     source_id = db.Column(db.Integer, nullable=True)            # id della riga/documento sorgente
@@ -556,6 +559,8 @@ class StockMovement(db.Model):
 
     @property
     def total_value(self):
+        if self.posting_value is not None:
+            return Decimal(str(self.posting_value))
         if self.unit_cost is None:
             return None
         return Decimal(str(self.qty)) * Decimal(str(self.unit_cost))

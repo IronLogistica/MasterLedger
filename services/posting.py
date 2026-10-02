@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from extensions import db
 from models import (Account, CostCenter, EconomicSubject, JournalEntry,
                     JournalLine, DocumentSequence, AccountingPeriod, FiscalParameter,
-                    InvoiceInstallment)
+                    InvoiceInstallment, PaymentAllocation)
 
 
 CENT = Decimal("0.01")
@@ -219,6 +219,8 @@ def _reverse_gl_only(original, created_by_id=None):
         source_module=original.source_module,
         reference=original.doc_number,
         created_by_id=created_by_id,
+        economic_subject_id=original.economic_subject_id,
+        gross_amount=original.gross_amount,
         commit=False,
         allow_inactive_accounts=True,
     )
@@ -249,15 +251,28 @@ def reverse_journal_entry(entry_id, created_by_id=None):
             "Documento generato da un modulo operativo: lo storno deve essere eseguito "
             "dal flusso sorgente per mantenere coerenti contabilità e stato operativo."
         )
-    if original.doc_type in ("KR", "DR", "DG") and original.is_paid:
-        raise ValueError("Prima di stornare il documento occorre stornarne il pagamento/incasso.")
+    if original.doc_type in ("KR", "DR", "DG"):
+        installments = InvoiceInstallment.query.filter_by(entry_id=original.id).all()
+        installment_ids = [inst.id for inst in installments]
+        has_active_allocations = bool(installment_ids) and PaymentAllocation.query.filter(
+            PaymentAllocation.installment_id.in_(installment_ids),
+            PaymentAllocation.reversed.is_(False),
+        ).first() is not None
+        is_partially_or_fully_settled = any(
+            Decimal(str(inst.residual_amount)) != Decimal(str(inst.amount))
+            for inst in installments
+        )
+        if original.is_paid or has_active_allocations or is_partially_or_fully_settled:
+            raise ValueError(
+                "Prima di stornare la fattura/nota occorre stornare tutti i pagamenti, "
+                "incassi, abbuoni e allocazioni che ne hanno ridotto il residuo."
+            )
 
     try:
         new_entry = _reverse_gl_only(original, created_by_id=created_by_id)
         # Lo storno del pagamento/incasso riapre atomically tutte le partite
         # che quel movimento aveva chiuso.
         if original.doc_type in ("KZ", "DZ"):
-            from models import PaymentAllocation
             from services.payments import reverse_payment_allocations
 
             has_tracked_allocations = PaymentAllocation.query.filter_by(
