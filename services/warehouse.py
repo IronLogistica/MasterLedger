@@ -12,7 +12,7 @@ Material.qty_on_hand resta come CACHE aggiornata ad ogni movimento per le
 query veloci (liste, badge), ma va sempre considerata un riflesso del
 ledger, mai l'inverso — se mai divergessero, ricalcola da StockMovement.
 """
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from extensions import db
 from models import Material, StockMovement, BillOfMaterial, BOMComponent
@@ -57,11 +57,16 @@ def post_stock_movement(material_id, qty, movement_type, source_type=None, sourc
             f"{float(material.qty_on_hand or 0):.3f}, richiesti {float(-qty):.3f}."
         )
 
+    signed_posting_value = None
+    if posting_value is not None:
+        # Il valore del ledger stock segue il segno della quantità: carico +,
+        # scarico -. L'importo è arrotondato esattamente come FI (HALF_UP).
+        magnitude = abs(Decimal(str(posting_value))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        signed_posting_value = magnitude if qty > 0 else -magnitude
     mv = StockMovement(
         material_id=material_id, warehouse_area_id=warehouse_area_id, qty=qty,
         unit_cost=Decimal(str(unit_cost)) if unit_cost is not None else None,
-        posting_value=(Decimal(str(posting_value)).quantize(Decimal("0.01"))
-                       if posting_value is not None else None),
+        posting_value=signed_posting_value,
         movement_type=movement_type, source_type=source_type, source_id=source_id,
         doc_date=doc_date or db.func.current_date(), notes=notes, created_by_id=created_by_id,
     )

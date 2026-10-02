@@ -13,7 +13,7 @@ Principi seguiti, coerenti con quanto deciso nel piano di trasformazione:
     dal proprio pannello, senza bisogno di toccare l'applicazione.
 """
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
@@ -1505,6 +1505,10 @@ class PayrollImport(db.Model):
     fingerprint = db.Column(db.String(64), nullable=False, unique=True)
     document_reference = db.Column(db.String(120), nullable=True)
     document_date = db.Column(db.Date, nullable=True)
+    # Chiave di competenza normalizzata YYYY-MM. Per PAYSLIP/RATEI impedisce
+    # a livello DB una seconda contabilizzazione dello stesso tipo e mese,
+    # anche se il PDF ha hash o nome differenti.
+    accounting_period = db.Column(db.String(7), nullable=True)
     parsed_data = db.Column(db.Text, nullable=False)  # reviewed extraction snapshot, JSON
     status = db.Column(db.String(20), nullable=False, default="review")
     journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=True)
@@ -1512,6 +1516,10 @@ class PayrollImport(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     posted_at = db.Column(db.DateTime, nullable=True)
     journal_entry = db.relationship("JournalEntry")
+    __table_args__ = (
+        db.UniqueConstraint("document_kind", "accounting_period",
+                            name="uq_payroll_import_kind_period"),
+    )
 
 class PayrollEmployeeAllocation(db.Model):
     """Percentual split; legacy PayrollEmployeeMapping.cost_center_id remains readable."""
@@ -1558,10 +1566,34 @@ class ProductionOrder(db.Model):
     cost_center = db.relationship("CostCenter")
     issues = db.relationship("ProductionMaterialIssue", backref="production_order", cascade="all, delete-orphan")
     absorptions = db.relationship("ProductionCostAbsorption", backref="production_order", cascade="all, delete-orphan")
+    receipts = db.relationship("ProductionReceipt", backref="production_order", cascade="all, delete-orphan")
+
+    @property
+    def gross_wip(self):
+        """Costi effettivi accumulati sulla commessa, arrotondati come le righe FI."""
+        return (sum((i.total_cost for i in self.issues), Decimal("0")) +
+                sum((Decimal(str(a.amount)) for a in self.absorptions), Decimal("0"))).quantize(Decimal("0.01"))
+
+    @property
+    def settled_wip(self):
+        settled = sum((Decimal(str(r.wip_relieved)) for r in self.receipts), Decimal("0")).quantize(Decimal("0.01"))
+        # Compatibilità controllata: prima dell'introduzione dei versamenti
+        # analitici una commessa "completata" aveva già scaricato tutto il WIP
+        # in FI, ma non possiede righe ProductionReceipt da ricostruire in modo
+        # affidabile. Non la si deve riaprire contabilmente per errore.
+        if not self.receipts and self.status == "completata":
+            return self.gross_wip
+        return settled
 
     @property
     def actual_wip(self):
-        return sum((i.total_cost for i in self.issues), Decimal("0")) + sum((a.amount for a in self.absorptions), Decimal("0"))
+        """WIP ancora aperto: accumulato meno quanto già scaricato nei versamenti PF."""
+        return (self.gross_wip - self.settled_wip).quantize(Decimal("0.01"))
+
+    @property
+    def qty_completed(self):
+        completed = sum((Decimal(str(r.qty)) for r in self.receipts), Decimal("0")).quantize(Decimal("0.001"))
+        return Decimal(str(self.qty_planned)).quantize(Decimal("0.001")) if not self.receipts and self.status == "completata" else completed
 
 
 class ProductionMaterialIssue(db.Model):
@@ -1573,11 +1605,17 @@ class ProductionMaterialIssue(db.Model):
     qty = db.Column(db.Numeric(14, 3), nullable=False)
     unit_cost = db.Column(db.Numeric(14, 4), nullable=False)
     journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False)
+    stock_movement_id = db.Column(db.Integer, db.ForeignKey("stock_movements.id"), nullable=True, unique=True)
     issue_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
     material = db.relationship("Material")
     journal_entry = db.relationship("JournalEntry")
+    stock_movement = db.relationship("StockMovement")
     @property
-    def total_cost(self): return Decimal(str(self.qty)) * Decimal(str(self.unit_cost))
+    def total_cost(self):
+        # Stesso arrotondamento della scrittura FI: il WIP gestionale deve
+        # riconciliarsi al centesimo con il mastro 157000.
+        return (Decimal(str(self.qty)) * Decimal(str(self.unit_cost))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class ProductionCostAbsorption(db.Model):
@@ -1591,6 +1629,28 @@ class ProductionCostAbsorption(db.Model):
     posting_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
     notes = db.Column(db.String(255))
     journal_entry = db.relationship("JournalEntry")
+
+
+class ProductionReceipt(db.Model):
+    """Versamento parziale/finale PF con scarico del solo WIP attribuito.
+
+    La riga rende ripetibile l'audit: quantità, valore PF a standard, WIP
+    effettivamente scaricato e varianza rimangono congelati per ogni evento.
+    """
+    __tablename__ = "production_receipts"
+    id = db.Column(db.Integer, primary_key=True)
+    production_order_id = db.Column(db.Integer, db.ForeignKey("production_orders.id"), nullable=False, index=True)
+    qty = db.Column(db.Numeric(14, 3), nullable=False)
+    standard_value = db.Column(db.Numeric(14, 2), nullable=False)
+    wip_relieved = db.Column(db.Numeric(14, 2), nullable=False)
+    variance = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey("journal_entries.id"), nullable=False, unique=True)
+    stock_movement_id = db.Column(db.Integer, db.ForeignKey("stock_movements.id"), nullable=False, unique=True)
+    posting_date = db.Column(db.Date, nullable=False, default=datetime.utcnow().date)
+    created_by_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    journal_entry = db.relationship("JournalEntry")
+    stock_movement = db.relationship("StockMovement")
 
 
 # ══════════════════════════════════════════════════════════════

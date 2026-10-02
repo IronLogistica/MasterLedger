@@ -80,11 +80,12 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
     if not isinstance(lines, (list, tuple)) or len(lines) < 2:
         raise UnbalancedEntryError("Servono almeno due righe contabili.")
 
-    # Il periodo contabile dipende dalla data di registrazione, non dalla data
-    # riportata sul DDT/fattura. I chiamanti storici senza posting_date
-    # mantengono il comportamento precedente.
-    effective_date = posting_date or doc_date or date.today()
-    _check_period_open(effective_date)
+    # Determina UNA SOLA data contabile, usata sia per il controllo del periodo
+    # sia per il valore effettivamente persistito. In precedenza il controllo
+    # poteva avvenire su doc_date mentre posting_date veniva salvata a oggi.
+    effective_posting_date = posting_date or doc_date or date.today()
+    effective_doc_date = doc_date or effective_posting_date
+    _check_period_open(effective_posting_date)
 
     normalized = []
     account_ids = set()
@@ -168,8 +169,8 @@ def post_journal_entry(doc_type, prefix, doc_date, description, lines, source_mo
     entry = JournalEntry(
         doc_number=doc_number,
         doc_type=doc_type,
-        doc_date=doc_date or date.today(),
-        posting_date=posting_date or date.today(),
+        doc_date=effective_doc_date,
+        posting_date=effective_posting_date,
         description=description,
         source_module=source_module,
         reference=reference,
